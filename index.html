@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Emoji Status Display with Volume Slider</title>
+    <title>ピロトンのサイト</title>
     <style>
         :root {
             --bg-color-light: rgba(255, 255, 255, 0.8);
@@ -176,6 +176,27 @@
         .theme-toggle-switch.inactive::before {
             transform: translateX(0);
         }
+
+        .piloton {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            font-size: 14px;
+            font-weight: bold;
+            color: #ffffff;
+            text-shadow: 0 0 5px #00ffcc, 0 0 10px #00ffcc, 0 0 20px #00ffcc;
+            animation: glow 1.5s infinite alternate;
+            z-index: 15;
+        }
+
+        @keyframes glow {
+            from {
+                text-shadow: 0 0 5px #00ffcc, 0 0 10px #00ffcc, 0 0 20px #00ffcc;
+            }
+            to {
+                text-shadow: 0 0 10px #00ffcc, 0 0 20px #00ffcc, 0 0 40px #00ffcc;
+            }
+        }
     </style>
 </head>
 <body>
@@ -224,6 +245,7 @@
                 oninput="updateVolume(this.value)"
             />
         </div>
+        <div class="piloton">Piloton</div>
     </div>
 
     <script>
