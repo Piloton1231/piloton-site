@@ -1,260 +1,358 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Emoji Status Display with Volume Slider</title>
-    <style>
-        :root {
-            --bg-color-light: rgba(255, 255, 255, 0.8);
-            --text-color-light: #000000;
-            --bg-color-dark: rgba(18, 18, 18, 0.8);
-            --text-color-dark: #ffffff;
-            --button-bg-light: rgba(249, 249, 249, 0.8);
-            --button-bg-dark: rgba(51, 51, 51, 0.8);
-            --button-border-light: #ccc;
-            --button-border-dark: #555;
-        }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>豪華ルーレット</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3"></script>
+  <style>
+    :root {
+      --bg-color-light: #f5f5f5;
+      --text-color-light: #333;
+      --bg-color-dark: #1e1e1e;
+      --text-color-dark: #f5f5f5;
+      --primary-color: #28a745;
+      --secondary-color: #dc3545;
+      --border-color-light: #ccc;
+      --border-color-dark: #444;
+      --highlight-color: #ffcc00;
+    }
 
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
-            color: var(--text-color-dark);
-            transition: color 0.3s;
-        }
+    body {
+      font-family: 'Arial', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: var(--bg-color-light);
+      color: var(--text-color-light);
+      transition: background-color 0.3s, color 0.3s;
+      background-size: 100% 100%; /* 引き延ばして表示 */
+      background-position: center;
+      background-repeat: no-repeat;
+    }
 
-        .background {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
-            overflow: hidden;
-        }
+    body.dark {
+      background: var(--bg-color-dark);
+      color: var(--text-color-dark);
+    }
 
-        .background video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
+    .theme-toggle {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
 
-        .container {
-            display: flex;
-            align-items: center;
-            width: 100%;
-            height: 100%;
-            position: relative;
-            background-color: var(--bg-color-dark);
-            transition: background-color 0.3s;
-        }
+    .toggle-switch {
+      position: relative;
+      width: 50px;
+      height: 25px;
+      background-color: var(--border-color-light);
+      border-radius: 25px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
 
-        .buttons {
-            position: fixed;
-            left: -300px;
-            top: 50%;
-            transform: translateY(-50%);
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            transition: left 0.3s ease;
-            z-index: 10;
-        }
+    body.dark .toggle-switch {
+      background-color: var(--border-color-dark);
+    }
 
-        .buttons.visible {
-            left: 10px;
-        }
+    .toggle-switch::before {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 21px;
+      height: 21px;
+      background-color: white;
+      border-radius: 50%;
+      transition: transform 0.3s;
+    }
 
-        .button {
-            font-size: 24px;
-            padding: 10px 20px;
-            cursor: pointer;
-            border: 2px solid var(--button-border-dark);
-            border-radius: 5px;
-            background-color: var(--button-bg-dark);
-            color: var(--text-color-dark);
-            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
-        }
+    body.dark .toggle-switch::before {
+      transform: translateX(25px);
+    }
 
-        .button:hover {
-            background-color: #444444;
-        }
+    .main-container {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
 
-        .toggle-button {
-            position: fixed;
-            left: 10px;
-            top: 10px;
-            font-size: 18px;
-            padding: 10px 20px;
-            cursor: pointer;
-            border: 2px solid var(--button-border-dark);
-            border-radius: 5px;
-            background-color: var(--button-bg-dark);
-            color: var(--text-color-dark);
-            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
-            z-index: 11;
-        }
+    .roulette-container {
+      position: relative;
+      width: 400px;
+      height: 400px;
+    }
 
-        .toggle-button:hover {
-            background-color: #444444;
-        }
+    canvas {
+      border: 5px solid var(--highlight-color);
+      border-radius: 50%;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+      transition: border-color 0.3s;
+    }
 
-        .display {
-            flex-grow: 1;
-            font-size: 48px;
-            font-weight: bold;
-            text-align: center;
-            transition: transform 0.3s;
-            z-index: 1;
-        }
+    body.dark canvas {
+      border-color: var(--text-color-dark);
+    }
 
-        .slider-container {
-            position: absolute;
-            bottom: 20px;
-            width: 100%;
-            text-align: center;
-        }
+    .pointer {
+      position: absolute;
+      top: 50%;
+      right: 0;
+      transform: translate(50%, -50%);
+      width: 0;
+      height: 0;
+      border-top: 15px solid transparent;
+      border-bottom: 15px solid transparent;
+      border-right: 30px solid var(--highlight-color);
+    }
 
-        .slider {
-            width: 300px;
-        }
+    .right-section {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      width: 250px;
+    }
 
-        .volume-container {
-            position: absolute;
-            bottom: 60px;
-            width: 100%;
-            text-align: center;
-        }
+    textarea {
+      width: 100%;
+      height: 150px;
+      padding: 10px;
+      font-size: 14px;
+      border: 1px solid var(--border-color-light);
+      border-radius: 5px;
+      background-color: var(--bg-color-light);
+      color: var(--text-color-light);
+      transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+    }
 
-        .theme-toggle {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            z-index: 12;
-        }
+    body.dark textarea {
+      border-color: var(--border-color-dark);
+      background-color: var(--bg-color-dark);
+      color: var(--text-color-dark);
+    }
 
-        .theme-toggle-label {
-            font-size: 16px;
-        }
+    .buttons {
+      display: flex;
+      gap: 10px;
+    }
 
-        .theme-toggle-switch {
-            position: relative;
-            width: 50px;
-            height: 25px;
-            background-color: #4caf50; /* Active by default */
-            border-radius: 25px;
-            cursor: pointer;
-            transition: background-color 0.3s;
-        }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s, color 0.3s;
+    }
 
-        .theme-toggle-switch::before {
-            content: '';
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 21px;
-            height: 21px;
-            background-color: #fff;
-            border-radius: 50%;
-            transform: translateX(25px); /* Active position by default */
-            transition: transform 0.3s;
-        }
+    button#spin-btn {
+      background-color: var(--primary-color);
+      color: white;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    }
 
-        .theme-toggle-switch.inactive {
-            background-color: #555;
-        }
+    button#reset-btn {
+      background-color: var(--secondary-color);
+      color: white;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    }
 
-        .theme-toggle-switch.inactive::before {
-            transform: translateX(0);
-        }
-    </style>
+    .winner-display {
+      margin-top: 20px;
+      font-size: 24px;
+      font-weight: bold;
+      text-align: center;
+      color: var(--highlight-color);
+      text-shadow: 0 0 10px rgba(255, 204, 0, 0.8);
+    }
+
+    .background-selector {
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    .background-selector input {
+      margin-top: 10px;
+    }
+  </style>
 </head>
 <body>
-    <div class="background">
-        <!-- Replace the video source with your desired file -->
-        <video autoplay loop id="background-video">
-            <source src="https://files.catbox.moe/bb8wzj.mp4" type="video/mp4">
-        </video>
-    </div>
-    <div class="container">
-        <button class="toggle-button" onclick="toggleButtons()">＞</button>
-        <div class="buttons" id="buttons">
-            <button class="button" onclick="updateDisplay('🚗', 'お出かけ中')">🚗 車でお出かけ</button>
-            <button class="button" onclick="updateDisplay('🚴', 'お出かけ中')">🚴 自転車でお出かけ</button>
-            <button class="button" onclick="updateDisplay('🚶', 'お出かけ中')">🚶 歩いてお出かけ</button>
-            <button class="button" onclick="updateDisplay('🛁', 'お風呂に入っています')">🛁 お風呂</button>
-            <button class="button" onclick="updateDisplay('🚿', 'シャワー中')">🚿 シャワー中</button>
-            <button class="button" onclick="updateDisplay('🎮', 'ゲーム中')">🎮 ゲーム中</button>
-            <button class="button" onclick="updateDisplay('💺', '離席中')">💺 離席中</button>
-            <button class="button" onclick="updateDisplay('📞', '電話中')">📞 電話中</button>
-        </div>
-        <div class="display" id="display">
-            選択してください
-        </div>
-        <div class="slider-container">
-            <label for="zoom-slider">拡大率: <span id="zoom-value">100</span>%</label>
-            <input
-                type="range"
-                id="zoom-slider"
-                class="slider"
-                min="10"
-                max="200"
-                value="100"
-                oninput="updateZoom(this.value)"
-            />
-        </div>
-        <div class="volume-container">
-            <label for="volume-slider">音量: <span id="volume-value">5</span>%</label>
-            <input
-                type="range"
-                id="volume-slider"
-                class="slider"
-                min="0"
-                max="100"
-                value="5"
-                oninput="updateVolume(this.value)"
-            />
-        </div>
+  <div id="app">
+    <!-- ダークテーマ切り替え -->
+    <div class="theme-toggle">
+      <span>🌞</span>
+      <div class="toggle-switch" @click="toggleTheme"></div>
+      <span>🌙</span>
     </div>
 
-    <script>
-        let isDarkTheme = true;
+    <div class="main-container">
+      <!-- ルーレット -->
+      <div class="roulette-container">
+        <div class="pointer"></div>
+        <canvas id="wheel-canvas" width="400" height="400"></canvas>
+        <div class="winner-display" v-if="winner">
+          🎉 当選者: {{ winner }} 🎉
+        </div>
+      </div>
 
-        // Set initial volume for the background video
-        const backgroundVideo = document.getElementById('background-video');
-        backgroundVideo.volume = 0.05; // Default volume is 5%
+      <!-- テキスト入力とボタン -->
+      <div class="right-section">
+        <textarea v-model="participantsText" placeholder="参加者を入力 (一行につき一人)"></textarea>
+        <div class="buttons">
+          <button id="spin-btn" @click="spinWheel">開始</button>
+          <button id="reset-btn" @click="resetWheel">リセット</button>
+        </div>
+      </div>
+    </div>
 
-        function updateDisplay(emoji, text) {
-            const display = document.getElementById('display');
-            display.innerHTML = `${emoji} ${text}`;
+    <!-- 背景画像選択 -->
+    <div class="background-selector">
+      <label for="background-input">背景画像を選択:</label>
+      <input type="file" id="background-input" @change="setBackground">
+    </div>
+  </div>
+
+  <script>
+    const app = Vue.createApp({
+      data() {
+        return {
+          participantsText: '',
+          rotation: 0,
+          isSpinning: false,
+          winner: null,
+          isDarkTheme: false,
+        };
+      },
+      computed: {
+        participants() {
+          return this.participantsText.split('\n').filter(p => p.trim() !== ''); // Split by newline, remove empty lines
         }
-
-        function updateZoom(value) {
-            const display = document.getElementById('display');
-            const zoomValue = document.getElementById('zoom-value');
-            zoomValue.textContent = value;
-            display.style.transform = `scale(${value / 100})`;
+      },
+      watch: {
+        participantsText() {
+          // 名前が変更されたらルーレットを再描画
+          this.drawWheel();
         }
+      },
+      methods: {
+        drawWheel() {
+          const canvas = document.getElementById('wheel-canvas');
+          const ctx = canvas.getContext('2d');
+          const centerX = canvas.width / 2;
+          const centerY = canvas.height / 2;
+          const radius = canvas.width / 2;
 
-        function updateVolume(value) {
-            const volumeValue = document.getElementById('volume-value');
-            volumeValue.textContent = value;
-            backgroundVideo.volume = value / 100; // Update video volume
-        }
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        function toggleButtons() {
-            const buttons = document.getElementById('buttons');
-            buttons.classList.toggle('visible');
-        }
-    </script>
+          if (this.participants.length === 0) {
+            ctx.fillStyle = '#ccc';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('参加者を追加してください', centerX, centerY);
+            return;
+          }
+
+          const segmentAngle = (2 * Math.PI) / this.participants.length;
+
+          this.participants.forEach((participant, index) => {
+            const startAngle = index * segmentAngle;
+            const endAngle = startAngle + segmentAngle;
+
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.closePath();
+            ctx.fillStyle = `hsl(${(index * 360) / this.participants.length}, 70%, 70%)`;
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(startAngle + segmentAngle / 2);
+            ctx.textAlign = 'right';
+            ctx.fillStyle = '#000';
+            ctx.font = '16px Arial';
+            ctx.fillText(participant, radius - 10, 5);
+            ctx.restore();
+          });
+        },
+        spinWheel() {
+          if (this.isSpinning || this.participants.length === 0) return;
+
+          this.isSpinning = true;
+          const canvas = document.getElementById('wheel-canvas');
+          const ctx = canvas.getContext('2d');
+          const centerX = canvas.width / 2;
+          const centerY = canvas.height / 2;
+
+          const spinDuration = 3000; // Spin for 3 seconds
+          const spinRotations = 5; // Number of full rotations
+          const startRotation = this.rotation;
+          const totalRotation = spinRotations * 360 + Math.random() * 360;
+          const startTime = Date.now();
+
+          const animate = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / spinDuration, 1);
+            const easing = 1 - Math.pow(1 - progress, 3); // Ease-out effect
+            this.rotation = startRotation + totalRotation * easing;
+
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate((this.rotation * Math.PI) / 180);
+            ctx.translate(-centerX, -centerY);
+            this.drawWheel();
+            ctx.restore();
+
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+            } else {
+              this.isSpinning = false;
+              const selectedIndex = Math.floor(
+                ((360 - (this.rotation % 360)) % 360) / (360 / this.participants.length)
+              );
+              this.winner = this.participants[selectedIndex];
+            }
+          };
+
+          animate();
+        },
+        resetWheel() {
+          this.rotation = 0;
+          this.participantsText = '';
+          this.winner = null;
+          this.drawWheel();
+        },
+        toggleTheme() {
+          this.isDarkTheme = !this.isDarkTheme;
+          document.body.classList.toggle('dark', this.isDarkTheme);
+        },
+        setBackground(event) {
+          const file = event.target.files[0];
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+              document.body.style.backgroundImage = `url(${e.target.result})`;
+              document.body.style.backgroundSize = '100% 100%'; // 引き延ばして表示
+              document.body.style.backgroundPosition = 'center';
+            };
+            reader.readAsDataURL(file);
+          }
+        },
+      },
+      mounted() {
+        this.drawWheel();
+      }
+    });
+
+    app.mount('#app');
+  </script>
 </body>
 </html>
