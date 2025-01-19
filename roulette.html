@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>豪華ルーレット</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3"></script>
+  <style>
+    :root {
+      --bg-color-dark: #1e1e1e;
+      --text-color-dark: #f5f5f5;
+      --primary-color: #28a745;
+      --secondary-color: #dc3545;
+      --border-color-dark: #444;
+      --highlight-color: #ffcc00; /* 金色 */
+    }
+
+    body {
+      font-family: 'Arial', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: var(--bg-color-dark);
+      color: var(--text-color-dark);
+      transition: background-color 0.3s, color 0.3s;
+    }
+
+    .main-container {
+      display: flex;
+      gap: 50px; /* ルーレットと右側のセクションの間に余白を追加 */
+      align-items: flex-start;
+    }
+
+    .roulette-container {
+      position: relative;
+      width: 400px;
+      height: 400px;
+    }
+
+    canvas {
+      border: 5px solid var(--highlight-color); /* 金色の枠線 */
+      border-radius: 50%;
+      box-shadow: 0 0 20px rgba(255, 204, 0, 0.8); /* 金色の光の効果 */
+    }
+
+    .pointer {
+      position: absolute;
+      top: 50%;
+      right: -14px; /* ポインターを少し右にずらす */
+      transform: translate(50%, -50%);
+      width: 0;
+      height: 0;
+      border-top: 10px solid transparent; /* 上の幅を小さく */
+      border-bottom: 10px solid transparent; /* 下の幅を小さく */
+      border-right: 40px solid white; /* 白色のポインター */
+     }
+    .right-section {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      width: 250px;
+    }
+
+    textarea {
+      width: 100%;
+      height: 150px;
+      padding: 10px;
+      font-size: 14px;
+      border: 1px solid var(--border-color-dark);
+      border-radius: 5px;
+      background-color: var(--bg-color-dark);
+      color: var(--text-color-dark);
+    }
+
+    .buttons {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s, color 0.3s;
+    }
+
+    button#spin-btn {
+      background-color: var(--primary-color);
+      color: white;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    }
+
+    button#reset-btn {
+      background-color: var(--secondary-color);
+      color: white;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    }
+
+    .winner-display {
+      margin-top: 20px;
+      font-size: 24px;
+      font-weight: bold;
+      text-align: center;
+      color: var(--highlight-color); /* 金色の当選者表示 */
+      text-shadow: 0 0 10px rgba(255, 204, 0, 0.8);
+    }
+
+    .return-button {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      font-size: 16px;
+      padding: 10px 20px;
+      background-color: var(--primary-color);
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+      transition: background-color 0.3s, transform 0.2s;
+    }
+
+    .return-button:hover {
+      background-color: var(--secondary-color);
+      transform: scale(1.05);
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <button class="return-button" onclick="location.href='index.html'">Return to Index</button>
+    <div class="main-container">
+      <!-- ルーレット -->
+      <div class="roulette-container">
+        <div class="pointer"></div>
+        <canvas id="wheel-canvas" width="400" height="400"></canvas>
+        <div class="winner-display" v-if="winner">
+          🎉 当選者: {{ winner }} 🎉
+        </div>
+      </div>
+
+      <!-- テキスト入力とボタン -->
+      <div class="right-section">
+        <textarea v-model="participantsText" placeholder="参加者を入力 (一行につき一人)"></textarea>
+        <div class="buttons">
+          <button id="spin-btn" @click="spinWheel">開始</button>
+          <button id="reset-btn" @click="resetWheel">リセット</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const app = Vue.createApp({
+      data() {
+        return {
+          participantsText: '',
+          rotation: 0,
+          isSpinning: false,
+          winner: null,
+        };
+      },
+      computed: {
+        participants() {
+          return this.participantsText.split('\n').filter(p => p.trim() !== ''); // Split by newline, remove empty lines
+        }
+      },
+      watch: {
+        participantsText() {
+          // 名前が変更されたらルーレットを再描画
+          this.drawWheel();
+        }
+      },
+      methods: {
+        drawWheel() {
+          const canvas = document.getElementById('wheel-canvas');
+          const ctx = canvas.getContext('2d');
+          const centerX = canvas.width / 2;
+          const centerY = canvas.height / 2;
+          const radius = canvas.width / 2;
+
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          if (this.participants.length === 0) {
+            ctx.fillStyle = '#ccc';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('参加者を追加してください', centerX, centerY);
+            return;
+          }
+
+          const segmentAngle = (2 * Math.PI) / this.participants.length;
+
+          this.participants.forEach((participant, index) => {
+            const startAngle = index * segmentAngle;
+            const endAngle = startAngle + segmentAngle;
+
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.closePath();
+            ctx.fillStyle = `hsl(${(index * 360) / this.participants.length}, 70%, 70%)`;
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(startAngle + segmentAngle / 2);
+            ctx.textAlign = 'right';
+            ctx.fillStyle = '#000';
+            ctx.font = '16px Arial';
+            ctx.fillText(participant, radius - 10, 5);
+            ctx.restore();
+          });
+        },
+        spinWheel() {
+          if (this.isSpinning || this.participants.length === 0) return;
+
+          this.isSpinning = true;
+          const canvas = document.getElementById('wheel-canvas');
+          const ctx = canvas.getContext('2d');
+          const centerX = canvas.width / 2;
+          const centerY = canvas.height / 2;
+
+          const spinDuration = 3000; // Spin for 3 seconds
+          const spinRotations = 10; // Number of full rotations
+          const startRotation = this.rotation;
+          const totalRotation = spinRotations * 360 + Math.random() * 360;
+          const startTime = Date.now();
+
+          const animate = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / spinDuration, 1);
+            const easing = 1 - Math.pow(1 - progress, 3); // Ease-out effect
+            this.rotation = startRotation + totalRotation * easing;
+
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate((this.rotation * Math.PI) / 180);
+            ctx.translate(-centerX, -centerY);
+            this.drawWheel();
+            ctx.restore();
+
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+            } else {
+              this.isSpinning = false;
+              const selectedIndex = Math.floor(
+                ((360 - (this.rotation % 360)) % 360) / (360 / this.participants.length)
+              );
+              this.winner = this.participants[selectedIndex];
+            }
+          };
+
+          animate();
+        },
+        resetWheel() {
+          this.rotation = 0;
+          this.participantsText = '';
+          this.winner = null;
+          this.drawWheel();
+        },
+      },
+      mounted() {
+        this.drawWheel();
+      }
+    });
+
+    app.mount('#app');
+  </script>
+</body>
+</html>

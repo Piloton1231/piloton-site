@@ -1,282 +1,148 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ピロトンのサイト</title>
-    <style>
-        :root {
-            --bg-color-light: rgba(255, 255, 255, 0.8);
-            --text-color-light: #000000;
-            --bg-color-dark: rgba(18, 18, 18, 0.8);
-            --text-color-dark: #ffffff;
-            --button-bg-light: rgba(249, 249, 249, 0.8);
-            --button-bg-dark: rgba(51, 51, 51, 0.8);
-            --button-border-light: #ccc;
-            --button-border-dark: #555;
-        }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome Page</title>
+  <style>
+    :root {
+      --bg-color: #1e1e1e;
+      --text-color: #ffffff;
+      --button-bg: #28a745;
+      --button-hover-bg: #218838;
+      --button-text-color: #ffffff;
+      --welcome-color: rgba(255, 255, 255, 0.8);
+    }
 
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
-            color: var(--text-color-dark);
-            transition: color 0.3s;
-        }
+    /* 全体のスタイル */
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
 
-        .background {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
-            overflow: hidden;
-        }
+    /* 雪の背景 */
+    body::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: url('https://i.imgur.com/dicoRAD.gif') repeat;
+      animation: snow 20s linear infinite;
+      z-index: -1;
+      opacity: 0.5;
+    }
 
-        .background video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
+    @keyframes snow {
+      from {
+        background-position: 0 0;
+      }
+      to {
+        background-position: 0 1000px;
+      }
+    }
 
-        .container {
-            display: flex;
-            align-items: center;
-            width: 100%;
-            height: 100%;
-            position: relative;
-            background-color: var(--bg-color-dark);
-            transition: background-color 0.3s;
-        }
+    /* WELCOMEのフェードイン */
+    .welcome {
+      font-size: 64px;
+      font-weight: bold;
+      color: var(--welcome-color);
+      text-align: center;
+      opacity: 0;
+      animation: fadeIn 2s ease-in-out forwards;
+      margin-bottom: 50px;
+      text-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(255, 255, 255, 0.6);
+    }
 
-        .buttons {
-            position: fixed;
-            left: -300px;
-            top: 50%;
-            transform: translateY(-50%);
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            transition: left 0.3s ease;
-            z-index: 10;
-        }
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(-50px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
 
-        .buttons.visible {
-            left: 10px;
-        }
+    /* ボタンのコンテナ */
+    .buttons {
+      display: flex;
+      gap: 20px;
+    }
 
-        .button {
-            font-size: 24px;
-            padding: 10px 20px;
-            cursor: pointer;
-            border: 2px solid var(--button-border-dark);
-            border-radius: 5px;
-            background-color: var(--button-bg-dark);
-            color: var(--text-color-dark);
-            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
-        }
+    /* ボタンのスタイル */
+    .button {
+      position: relative;
+      padding: 15px 30px;
+      font-size: 18px;
+      font-weight: bold;
+      color: var(--button-text-color);
+      background-color: var(--button-bg);
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      overflow: hidden;
+      transition: background-color 0.3s ease, transform 0.2s ease;
+    }
 
-        .button:hover {
-            background-color: #444444;
-        }
+    .button:hover {
+      background-color: var(--button-hover-bg);
+      transform: scale(1.05);
+    }
 
-        .toggle-button {
-            position: fixed;
-            left: 10px;
-            top: 10px;
-            font-size: 18px;
-            padding: 10px 20px;
-            cursor: pointer;
-            border: 2px solid var(--button-border-dark);
-            border-radius: 5px;
-            background-color: var(--button-bg-dark);
-            color: var(--text-color-dark);
-            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
-            z-index: 11;
-        }
+    .button:active {
+      transform: scale(0.95);
+    }
 
-        .toggle-button:hover {
-            background-color: #444444;
-        }
+    /* ボタンのエフェクト（マウスが通ると●が広がる） */
+    .button::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 0;
+      height: 0;
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      transition: width 0.5s ease, height 0.5s ease;
+      z-index: 0;
+    }
 
-        .display {
-            flex-grow: 1;
-            font-size: 48px;
-            font-weight: bold;
-            text-align: center;
-            transition: transform 0.3s;
-            z-index: 1;
-        }
+    .button:hover::before {
+      width: 300%;
+      height: 300%;
+    }
 
-        .slider-container {
-            position: absolute;
-            bottom: 20px;
-            width: 100%;
-            text-align: center;
-        }
-
-        .slider {
-            width: 300px;
-        }
-
-        .volume-container {
-            position: absolute;
-            bottom: 60px;
-            width: 100%;
-            text-align: center;
-        }
-
-        .theme-toggle {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            z-index: 12;
-        }
-
-        .theme-toggle-label {
-            font-size: 16px;
-        }
-
-        .theme-toggle-switch {
-            position: relative;
-            width: 50px;
-            height: 25px;
-            background-color: #4caf50; /* Active by default */
-            border-radius: 25px;
-            cursor: pointer;
-            transition: background-color 0.3s;
-        }
-
-        .theme-toggle-switch::before {
-            content: '';
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 21px;
-            height: 21px;
-            background-color: #fff;
-            border-radius: 50%;
-            transform: translateX(25px); /* Active position by default */
-            transition: transform 0.3s;
-        }
-
-        .theme-toggle-switch.inactive {
-            background-color: #555;
-        }
-
-        .theme-toggle-switch.inactive::before {
-            transform: translateX(0);
-        }
-
-        .piloton {
-            position: fixed;
-            bottom: 10px;
-            right: 10px;
-            font-size: 14px;
-            font-weight: bold;
-            color: #ffffff;
-            text-shadow: 0 0 5px #00ffcc, 0 0 10px #00ffcc, 0 0 20px #00ffcc;
-            animation: glow 1.5s infinite alternate;
-            z-index: 15;
-        }
-
-        @keyframes glow {
-            from {
-                text-shadow: 0 0 5px #00ffcc, 0 0 10px #00ffcc, 0 0 20px #00ffcc;
-            }
-            to {
-                text-shadow: 0 0 10px #00ffcc, 0 0 20px #00ffcc, 0 0 40px #00ffcc;
-            }
-        }
-    </style>
+    .button span {
+      position: relative;
+      z-index: 1;
+    }
+  </style>
 </head>
 <body>
-    <div class="background">
-        <!-- Replace the video source with your desired file -->
-        <video autoplay loop id="background-video">
-            <source src="https://files.catbox.moe/bb8wzj.mp4" type="video/mp4">
-        </video>
-    </div>
-    <div class="container">
-        <button class="toggle-button" onclick="toggleButtons()">＞</button>
-        <div class="buttons" id="buttons">
-            <button class="button" onclick="updateDisplay('🚗', 'お出かけ中')">🚗 車でお出かけ</button>
-            <button class="button" onclick="updateDisplay('🚴', 'お出かけ中')">🚴 自転車でお出かけ</button>
-            <button class="button" onclick="updateDisplay('🚶', 'お出かけ中')">🚶 歩いてお出かけ</button>
-            <button class="button" onclick="updateDisplay('🛁', 'お風呂に入っています')">🛁 お風呂</button>
-            <button class="button" onclick="updateDisplay('🚿', 'シャワー中')">🚿 シャワー中</button>
-            <button class="button" onclick="updateDisplay('🎮', 'ゲーム中')">🎮 ゲーム中</button>
-            <button class="button" onclick="updateDisplay('💺', '離席中')">💺 離席中</button>
-            <button class="button" onclick="updateDisplay('📞', '電話中')">📞 電話中</button>
-        </div>
-        <div class="display" id="display">
-            選択してください
-        </div>
-        <div class="slider-container">
-            <label for="zoom-slider">拡大率: <span id="zoom-value">100</span>%</label>
-            <input
-                type="range"
-                id="zoom-slider"
-                class="slider"
-                min="10"
-                max="200"
-                value="100"
-                oninput="updateZoom(this.value)"
-            />
-        </div>
-        <div class="volume-container">
-            <label for="volume-slider">音量: <span id="volume-value">5</span>%</label>
-            <input
-                type="range"
-                id="volume-slider"
-                class="slider"
-                min="0"
-                max="100"
-                value="5"
-                oninput="updateVolume(this.value)"
-            />
-        </div>
-        <div class="piloton">Piloton</div>
-    </div>
+  <!-- WELCOMEの文字 -->
+  <div class="welcome">WELCOME</div>
 
-    <script>
-        let isDarkTheme = true;
-
-        // Set initial volume for the background video
-        const backgroundVideo = document.getElementById('background-video');
-        backgroundVideo.volume = 0.05; // Default volume is 5%
-
-        function updateDisplay(emoji, text) {
-            const display = document.getElementById('display');
-            display.innerHTML = `${emoji} ${text}`;
-        }
-
-        function updateZoom(value) {
-            const display = document.getElementById('display');
-            const zoomValue = document.getElementById('zoom-value');
-            zoomValue.textContent = value;
-            display.style.transform = `scale(${value / 100})`;
-        }
-
-        function updateVolume(value) {
-            const volumeValue = document.getElementById('volume-value');
-            volumeValue.textContent = value;
-            backgroundVideo.volume = value / 100; // Update video volume
-        }
-
-        function toggleButtons() {
-            const buttons = document.getElementById('buttons');
-            buttons.classList.toggle('visible');
-        }
-    </script>
+  <!-- ボタン -->
+  <div class="buttons">
+    <button class="button" onclick="location.href='roulette.html'">
+      <span>Go to Roulette</span>
+    </button>
+    <button class="button" onclick="location.href='idle.html'">
+      <span>Go to Idle</span>
+    </button>
+  </div>
 </body>
 </html>
