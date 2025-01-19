@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Welcome Page</title>
+  <title>Welcome Page with MP3 Playback</title>
   <style>
     :root {
       --bg-color: #1e1e1e;
@@ -129,6 +129,19 @@
       position: relative;
       z-index: 1;
     }
+
+    /* MP3プレイヤーのスタイル */
+    .audio-player {
+      margin-top: 30px;
+      text-align: center;
+    }
+
+    .audio-player audio {
+      width: 300px;
+      border: 2px solid var(--button-bg);
+      border-radius: 5px;
+      background-color: var(--bg-color);
+    }
   </style>
 </head>
 <body>
@@ -144,5 +157,20 @@
       <span>Go to Idle</span>
     </button>
   </div>
+
+  <!-- MP3プレイヤー -->
+  <div class="audio-player">
+    <p>🎵 CHIPI CHIPI CHAPA CHAPA 🎵</p>
+    <audio id="audio-player" controls>
+      <source src="https://files.catbox.moe/d4ryu9.mp3" type="audio/mpeg">
+      Your browser does not support the audio element.
+    </audio>
+  </div>
+
+  <script>
+    // Set the default volume to 5%
+    const audioPlayer = document.getElementById('audio-player');
+    audioPlayer.volume = 0.05;
+  </script>
 </body>
 </html>
