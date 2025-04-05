@@ -8,8 +8,8 @@
     :root {
       --bg-color: #1e1e1e;
       --text-color: #ffffff;
-      --button-bg: #28a745;
-      --button-hover-bg: #218838;
+      --button-bg: linear-gradient(45deg, #ff416c, #ff4b2b);
+      --button-hover-bg: linear-gradient(45deg, #ff4b2b, #ff416c);
       --button-text-color: #ffffff;
       --welcome-color: rgba(255, 255, 255, 0.8);
     }
@@ -79,6 +79,8 @@
     .buttons {
       display: flex;
       gap: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
     }
 
     /* ボタンのスタイル */
@@ -88,17 +90,19 @@
       font-size: 18px;
       font-weight: bold;
       color: var(--button-text-color);
-      background-color: var(--button-bg);
+      background: var(--button-bg);
       border: none;
-      border-radius: 5px;
+      border-radius: 50px;
       cursor: pointer;
       overflow: hidden;
-      transition: background-color 0.3s ease, transform 0.2s ease;
+      transition: background 0.3s ease, transform 0.2s ease, box-shadow 0.3s ease;
+      text-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
     }
 
     .button:hover {
-      background-color: var(--button-hover-bg);
-      transform: scale(1.05);
+      background: var(--button-hover-bg);
+      transform: scale(1.1);
+      box-shadow: 0 4px 15px rgba(255, 75, 43, 0.5);
     }
 
     .button:active {
@@ -138,7 +142,7 @@
 
     .audio-player audio {
       width: 300px;
-      border: 2px solid var(--button-bg);
+      border: 2px solid #ff4b2b;
       border-radius: 5px;
       background-color: var(--bg-color);
     }
@@ -155,6 +159,9 @@
     </button>
     <button class="button" onclick="location.href='idle.html'">
       <span>Go to Idle</span>
+    </button>
+    <button class="button" onclick="location.href='phub-logo.html'">
+      <span>Phub ロゴジェネレーター</span>
     </button>
   </div>
 
