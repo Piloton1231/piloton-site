@@ -9,9 +9,9 @@
     :root {
       --bg-color-dark: #1e1e1e;
       --text-color-dark: #f5f5f5;
-      --primary-color: #28a745;
-      --secondary-color: #dc3545;
-      --border-color-dark: #444;
+      --primary-color: linear-gradient(45deg, #ff416c, #ff4b2b); /* グラデーション */
+      --primary-hover-color: linear-gradient(45deg, #ff4b2b, #ff416c); /* ホバー時のグラデーション */
+      --text-color-light: #ffffff;
       --highlight-color: #ffcc00; /* 金色 */
     }
 
@@ -56,7 +56,8 @@
       border-top: 10px solid transparent; /* 上の幅を小さく */
       border-bottom: 10px solid transparent; /* 下の幅を小さく */
       border-right: 40px solid white; /* 白色のポインター */
-     }
+    }
+
     .right-section {
       display: flex;
       flex-direction: column;
@@ -69,7 +70,7 @@
       height: 150px;
       padding: 10px;
       font-size: 14px;
-      border: 1px solid var(--border-color-dark);
+      border: 1px solid #444;
       border-radius: 5px;
       background-color: var(--bg-color-dark);
       color: var(--text-color-dark);
@@ -90,13 +91,13 @@
     }
 
     button#spin-btn {
-      background-color: var(--primary-color);
+      background-color: #28a745;
       color: white;
       box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
     }
 
     button#reset-btn {
-      background-color: var(--secondary-color);
+      background-color: #dc3545;
       color: white;
       box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
     }
@@ -110,30 +111,38 @@
       text-shadow: 0 0 10px rgba(255, 204, 0, 0.8);
     }
 
+    /* ホームに戻るボタンのスタイル */
     .return-button {
       position: fixed;
       top: 10px;
       right: 10px;
       font-size: 16px;
       padding: 10px 20px;
-      background-color: var(--primary-color);
-      color: white;
+      background: var(--primary-color); /* グラデーション背景 */
+      color: var(--text-color-light);
       border: none;
-      border-radius: 5px;
+      border-radius: 30px;
       cursor: pointer;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
-      transition: background-color 0.3s, transform 0.2s;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+      transition: transform 0.3s, box-shadow 0.3s, background 0.3s;
     }
 
     .return-button:hover {
-      background-color: var(--secondary-color);
-      transform: scale(1.05);
+      background: var(--primary-hover-color); /* ホバー時のグラデーション */
+      transform: scale(1.1); /* 拡大効果 */
+      box-shadow: 0 6px 15px rgba(255, 75, 43, 0.5); /* 光沢のある影 */
+    }
+
+    .return-button:active {
+      transform: scale(0.95); /* 押したときの縮小効果 */
     }
   </style>
 </head>
 <body>
   <div id="app">
+    <!-- ホームに戻るボタン -->
     <button class="return-button" onclick="location.href='index.html'">Return to HOME</button>
+
     <div class="main-container">
       <!-- ルーレット -->
       <div class="roulette-container">
