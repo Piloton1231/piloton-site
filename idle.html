@@ -14,6 +14,8 @@
             --button-bg-dark: rgba(51, 51, 51, 0.8);
             --button-border-light: #ccc;
             --button-border-dark: #555;
+            --primary-color: linear-gradient(45deg, #ff416c, #ff4b2b); /* グラデーション */
+            --primary-hover-color: linear-gradient(45deg, #ff4b2b, #ff416c); /* ホバー時のグラデーション */
         }
 
         body {
@@ -105,6 +107,7 @@
             background-color: #444444;
         }
 
+        /* Return to HOME ボタンのスタイル */
         .return-button {
             position: fixed;
             top: 10px;
@@ -112,16 +115,23 @@
             font-size: 18px;
             padding: 10px 20px;
             cursor: pointer;
-            border: 2px solid var(--button-border-dark);
-            border-radius: 5px;
-            background-color: var(--button-bg-dark);
-            color: var(--text-color-dark);
-            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+            border: none;
+            border-radius: 30px;
+            background: var(--primary-color); /* グラデーション背景 */
+            color: white;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s, box-shadow 0.3s, background 0.3s;
             z-index: 11;
         }
 
         .return-button:hover {
-            background-color: #444444;
+            background: var(--primary-hover-color); /* ホバー時のグラデーション */
+            transform: scale(1.1); /* 拡大効果 */
+            box-shadow: 0 6px 15px rgba(255, 75, 43, 0.5); /* 光沢のある影 */
+        }
+
+        .return-button:active {
+            transform: scale(0.95); /* 押したときの縮小効果 */
         }
 
         .display {
