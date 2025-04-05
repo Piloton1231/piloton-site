@@ -1,0 +1,180 @@
+<!DOCTYPE HTML>
+<html lang="ja">
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=11">
+    <meta name="application-name" content="Pornhub ロゴジェネレーター">
+    <meta name="msapplication-TileColor" content="#F1F1F1">
+    <meta name="description" content="簡単にあなたの Pornhub スタイルのロゴを作成">
+    <meta name="keywords" content="Pornhub ロゴ, Pornhub アイコン, ジェネレーター, ロゴ">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.3.7/dist/css/bootstrap.min.css" crossorigin="anonymous">
+    <title>Pornhub ロゴジェネレーター</title>
+    <script src="https://apps.bdimg.com/libs/jquery/2.1.4/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@3.3.7/dist/js/bootstrap.min.js" crossorigin="anonymous"></script>
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    <style type="text/css">
+        * {
+            transition-duration: 0.5s;
+        }
+
+        body {
+            background-color: #121212; /* ダークテーマの背景色 */
+            color: #FFFFFF; /* 白色の文字 */
+        }
+
+        #pornhub-bg {
+            background: #000000; /* ダークテーマの背景色 */
+            width: 480px;
+            height: 480px;
+            margin-top: 32px;
+            position: fixed;
+            left: -99999px;
+        }
+
+        #porn-text {
+            color: #FFFFFF; /* 白色のテキスト */
+            font-size: 100px;
+        }
+
+        #hub-text {
+            color: #000000; /* 黒色のテキスト */
+            background: rgb(254, 154, 0); /* オレンジ色の背景 */
+            border-radius: 8px;
+            padding: 8px;
+            font-size: 100px;
+        }
+
+        .text-line {
+            width: 100%;
+            height: 100%;
+        }
+
+        .text-line tr {
+            height: 100%;
+        }
+
+        .text-line tr td {
+            text-align: center;
+        }
+
+        #child {
+            margin-top: 32px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="row">
+            <div class="col-sm-12">
+                <h2>Pornhub ロゴジェネレーター</h2>
+                <p>あなたの Pornhub スタイルのロゴをカスタマイズ</p>
+                <hr>
+            </div>
+            <div class="col-sm-6">
+                <p>左側のテキスト（白色）</p>
+                <p><input type="text" id="porn" value="Porn" class="form-control" /></p>
+            </div>
+            <div class="col-sm-6">
+                <p>右側のテキスト（黒色）</p>
+                <p><input type="text" id="hub" value="Hub" class="form-control" /></p>
+            </div>
+            <div class="col-sm-3">
+                <p>フォントサイズ(px)</p>
+                <p><input type="number" id="fontsize" value="100" class="form-control" /></p>
+            </div>
+            <div class="col-sm-3">
+                <p>太字</p>
+                <p>
+                    <select class="form-control" id="bold">
+                        <option value="bold" selected>有効</option>
+                        <option value="300">無効</option>
+                    </select>
+                </p>
+            </div>
+            <div class="col-sm-3">
+                <p>背景の幅(px)</p>
+                <p><input type="number" id="bgwidth" value="480" class="form-control" /></p>
+            </div>
+            <div class="col-sm-3">
+                <p>背景の高さ(px)</p>
+                <p><input type="number" id="bgheight" value="480" class="form-control" /></p>
+            </div>
+            <div class="col-sm-3">
+                <p>背景色</p>
+                <p><input type="color" id="bgcolor" value="#000000" class="form-control" /></p>
+            </div>
+            <div class="col-sm-3">
+                <p>右側の背景色</p>
+                <p><input type="color" id="rightbgcolor" value="#FE9A00" class="form-control" /></p>
+            </div>
+            <div class="col-sm-3">
+                <p>左側の文字色</p>
+                <p><input type="color" id="leftcolor" value="#FFFFFF" class="form-control" /></p>
+            </div>
+            <div class="col-sm-3">
+                <p>右側の文字色</p>
+                <p><input type="color" id="rightcolor" value="#000000" class="form-control" /></p>
+            </div>
+            <div class="col-sm-12">
+                <div id="pornhub-bg">
+                    <table class="text-line">
+                        <tr>
+                            <td>
+                                <span id="porn-text">Porn</span>
+                                <span id="hub-text">Hub</span>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                <center id="child"></center>
+                <center style="margin-top: 32px;">
+                    <p><button class="btn btn-primary" onclick="download(saveAsPNG(canvasObj))">画像をダウンロード</button></p>
+                    <p>右クリックで画像を保存することもできます</p>
+                </center>
+            </div>
+        </div>
+    </div>
+    <script type="text/javascript">
+        var canvasObj;
+        window.onload = function () {
+            setInterval(function () {
+                document.getElementById("porn-text").innerHTML = porn.value;
+                document.getElementById("porn-text").style.fontWeight = bold.value;
+                document.getElementById("porn-text").style.color = leftcolor.value;
+                document.getElementById("hub-text").innerHTML = hub.value;
+                document.getElementById("hub-text").style.fontWeight = bold.value;
+                document.getElementById("hub-text").style.color = rightcolor.value;
+                document.getElementById("hub-text").style.background = rightbgcolor.value;
+                document.getElementById("porn-text").style.fontSize = fontsize.value + "px";
+                document.getElementById("hub-text").style.fontSize = fontsize.value + "px";
+                document.getElementById("pornhub-bg").style.width = bgwidth.value + "px";
+                document.getElementById("pornhub-bg").style.height = bgheight.value + "px";
+                document.getElementById("pornhub-bg").style.backgroundColor = bgcolor.value;
+                html2canvas(document.querySelector("#pornhub-bg")).then(canvas => {
+                    canvasObj = canvas;
+                    child.innerHTML = "";
+                    child.appendChild(canvas);
+                });
+            }, 1000);
+        }
+        function saveAsPNG(canvas) {
+            return canvas.toDataURL("image/png");
+        }
+        function download(url) {
+            var oA = document.createElement("a");
+            oA.download = 'Logo_' + clearText(porn.value + hub.value) + '-' + fontsize.value + '-' + bgwidth.value + 'x' + bgheight.value + 'px.png';
+            oA.href = url;
+            document.body.appendChild(oA);
+            oA.click();
+            oA.remove();
+        }
+        function clearText(str) {
+            return str.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("<", "_").replace(">", "_").replace("|", "_");
+        }
+    </script>
+</body>
+
+</html>
