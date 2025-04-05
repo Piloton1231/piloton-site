@@ -62,10 +62,39 @@
         #child {
             margin-top: 32px;
         }
+
+        /* ホームに戻るボタンのスタイル */
+        .return-button {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #ffffff;
+            background: linear-gradient(45deg, #ff416c, #ff4b2b);
+            border: none;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .return-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 15px rgba(255, 75, 43, 0.5);
+        }
+
+        .return-button:active {
+            transform: scale(0.95);
+        }
     </style>
 </head>
 
 <body>
+    <!-- ホームに戻るボタン -->
+    <button class="return-button" onclick="location.href='index.html'">Return to HOME</button>
+
     <div class="container">
         <div class="row">
             <div class="col-sm-12">
@@ -132,6 +161,7 @@
                 <center id="child"></center>
                 <center style="margin-top: 32px;">
                     <p><button class="btn btn-primary" onclick="download(saveAsPNG(canvasObj))">画像をダウンロード</button></p>
+                    <p>右クリックで画像を保存することもできます</p>
                 </center>
             </div>
         </div>
