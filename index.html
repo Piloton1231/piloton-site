@@ -60,7 +60,7 @@
       text-align: center;
       opacity: 0;
       animation: fadeIn 2s ease-in-out forwards;
-      margin-bottom: 50px;
+      margin-bottom: 20px;
       text-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(255, 255, 255, 0.6);
     }
 
@@ -73,6 +73,17 @@
         opacity: 1;
         transform: translateY(0);
       }
+    }
+
+    /* 訪問者カウンターのスタイル */
+    .visitor-counter {
+      text-align: center;
+      margin: 20px 0;
+    }
+
+    .visitor-counter p {
+      font-size: 24px;
+      margin-bottom: 10px;
     }
 
     /* ボタンのコンテナ */
@@ -151,6 +162,14 @@
 <body>
   <!-- WELCOMEの文字 -->
   <div class="welcome">WELCOME</div>
+
+  <!-- 訪問者カウンター -->
+  <div class="visitor-counter">
+    <p>訪問者数:</p>
+    <a href='http://www.freevisitorcounters.com'>www.freevisitorcounters.com</a>
+    <script type='text/javascript' src='https://www.freevisitorcounters.com/auth.php?id=f2aec4ce6567906441d681ae51240c39f839aed0'></script>
+    <script type="text/javascript" src="https://www.freevisitorcounters.com/en/home/counter/1327625/t/6"></script>
+  </div>
 
   <!-- ボタン -->
   <div class="buttons">
