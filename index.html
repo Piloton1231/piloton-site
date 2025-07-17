@@ -157,6 +157,27 @@
       border-radius: 5px;
       background-color: var(--bg-color);
     }
+
+    /* DiscordとXのスタイル */
+    .social-links {
+      text-align: center;
+      margin-top: 20px;
+    }
+
+    .social-links a, .social-links p {
+      font-size: 20px;
+      font-weight: bold;
+      text-decoration: none;
+      background: linear-gradient(90deg, red, orange, yellow, green, blue, indigo, violet);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: rainbow 1s linear infinite;
+    }
+
+    @keyframes rainbow {
+      0% { background-position: 0%; }
+      100% { background-position: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -184,6 +205,12 @@
     <button class="button" onclick="location.href='phub-logo.html'">
       <span>Phubロゴジェネレーター</span>
     </button>
+  </div>
+
+  <!-- DiscordとX -->
+  <div class="social-links">
+    <p>Discord: japan_2</p>
+    <a href="https://x.com/Y1111111111113" target="_blank">X: @Y1111111111113</a>
   </div>
 
   <!-- MP3プレイヤー -->
