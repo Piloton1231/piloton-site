@@ -30,16 +30,6 @@
       overflow: hidden;
     }
 
-    /* Canvasのスタイル */
-    canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: -2;
-    }
-
     /* 雪の背景 */
     body::before {
       content: '';
@@ -198,9 +188,6 @@
   </style>
 </head>
 <body>
-  <!-- Canvas for Audio Visualizer -->
-  <canvas id="audio-visualizer"></canvas>
-
   <!-- WELCOMEの文字 -->
   <div class="welcome">ぴーちゃんの家</div>
 
@@ -246,73 +233,16 @@
   <div class="cursor-effect" id="cursor-effect"></div>
 
   <script>
-    // Set the default volume to 50% and unmute
+    // Set the default volume to 5% and unmute
     const audioPlayer = document.getElementById('audio-player');
-    audioPlayer.volume = 0.5; // Default volume set to 50%
+    audioPlayer.volume = 0.04;
+    audioPlayer.muted = false;
 
     // マウスカーソル追従の光る丸
     const cursorEffect = document.getElementById('cursor-effect');
     document.addEventListener('mousemove', (e) => {
       cursorEffect.style.left = `${e.pageX}px`;
       cursorEffect.style.top = `${e.pageY}px`;
-    });
-
-    // Audio Visualizer
-    const canvas = document.getElementById('audio-visualizer');
-    const ctx = canvas.getContext('2d');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaElementSource(audioPlayer);
-
-    // Connect the audio nodes
-    source.connect(analyser);
-    analyser.connect(audioContext.destination); // Ensure audio is output to speakers
-    analyser.fftSize = 256;
-
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-
-    function drawVisualizer() {
-      requestAnimationFrame(drawVisualizer);
-
-      analyser.getByteFrequencyData(dataArray);
-
-      ctx.fillStyle = 'rgba(30, 30, 30, 0.5)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      const barWidth = (canvas.width / bufferLength) * 2.5;
-      let barHeight;
-      let x = 0;
-
-      for (let i = 0; i < bufferLength; i++) {
-        barHeight = dataArray[i];
-
-        const r = 237;
-        const g = 97;
-        const b = 234;
-
-        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-        ctx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
-
-        x += barWidth + 1;
-      }
-    }
-
-    // Resume audio context and unmute on user interaction
-    document.addEventListener('click', () => {
-      if (audioContext.state === 'suspended') {
-        audioContext.resume();
-      }
-      audioPlayer.muted = false; // Unmute the audio
-      audioPlayer.play(); // Ensure audio starts playing
-    });
-
-    audioPlayer.addEventListener('play', () => {
-      audioContext.resume();
-      drawVisualizer();
     });
   </script>
 </body>
