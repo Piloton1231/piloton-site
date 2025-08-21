@@ -12,6 +12,7 @@
       --button-hover-bg: linear-gradient(45deg, #ff4b2b, #ff416c);
       --button-text-color: #ffffff;
       --welcome-color: rgba(255, 255, 255, 0.8);
+      --pink-color: rgb(237, 97, 234);
     }
 
     /* 全体のスタイル */
@@ -168,25 +169,21 @@
       font-size: 20px;
       font-weight: bold;
       text-decoration: none;
-      background: linear-gradient(90deg, red, orange, yellow, green, blue, indigo, violet);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      animation: rainbow 1s linear infinite, glow 1.5s ease-in-out infinite;
-      text-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(255, 255, 255, 0.6);
+      color: var(--pink-color);
+      text-shadow: 0 0 10px var(--pink-color), 0 0 20px var(--pink-color);
     }
 
-    @keyframes rainbow {
-      0% { background-position: 0%; }
-      100% { background-position: 100%; }
-    }
-
-    @keyframes glow {
-      0%, 100% {
-        text-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(255, 255, 255, 0.6), 0 0 30px rgba(255, 255, 255, 0.4);
-      }
-      50% {
-        text-shadow: 0 0 20px rgba(255, 255, 255, 1), 0 0 30px rgba(255, 255, 255, 0.8), 0 0 40px rgba(255, 255, 255, 0.6);
-      }
+    /* マウスカーソル追従の光る丸 */
+    .cursor-effect {
+      position: absolute;
+      width: 50px;
+      height: 50px;
+      background-color: var(--pink-color);
+      border-radius: 50%;
+      pointer-events: none;
+      mix-blend-mode: lighten;
+      filter: blur(10px);
+      transform: translate(-50%, -50%);
     }
   </style>
 </head>
@@ -226,17 +223,27 @@
   <!-- MP3プレイヤー -->
   <div class="audio-player">
     <p>🎵 CHIPI CHIPI CHAPA CHAPA 🎵</p>
-    <audio id="audio-player" controls>
+    <audio id="audio-player" controls autoplay muted>
       <source src="https://files.catbox.moe/d4ryu9.mp3" type="audio/mpeg">
       Your browser does not support the audio element.
     </audio>
   </div>
 
+  <!-- マウスカーソル追従の光る丸 -->
+  <div class="cursor-effect" id="cursor-effect"></div>
+
   <script>
-    // Set the default volume to 5%
+    // Set the default volume to 5% and unmute
     const audioPlayer = document.getElementById('audio-player');
-    audioPlayer.volume = 0.05;
+    audioPlayer.volume = 0.04;
+    audioPlayer.muted = false;
+
+    // マウスカーソル追従の光る丸
+    const cursorEffect = document.getElementById('cursor-effect');
+    document.addEventListener('mousemove', (e) => {
+      cursorEffect.style.left = `${e.pageX}px`;
+      cursorEffect.style.top = `${e.pageY}px`;
+    });
   </script>
 </body>
 </html>
-
