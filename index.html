@@ -252,20 +252,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ぴーちゃんの家</title>
+  <title>ぴーちゃんの未来館</title>
   <style>
     :root {
-      --bg: #050711;
-      --panel: rgba(8, 18, 42, 0.68);
-      --panel-strong: rgba(15, 33, 75, 0.82);
-      --text: #f7fbff;
-      --muted: #a9b8d8;
-      --cyan: #36f6ff;
-      --blue: #4b7cff;
-      --violet: #b76cff;
-      --pink: #ff4fd8;
-      --lime: #9dffcb;
-      --line: rgba(93, 234, 255, 0.28);
+      --bg: #02040d;
+      --ink: #f4fbff;
+      --soft: #a8b8d8;
+      --cyan: #3df7ff;
+      --cyan-dark: #0aa7ff;
+      --pink: #ff3edb;
+      --purple: #8d5cff;
+      --green: #7cffc4;
+      --orange: #ffb14a;
+      --glass: rgba(8, 18, 39, 0.66);
+      --glass-strong: rgba(10, 24, 55, 0.86);
+      --line: rgba(111, 238, 255, 0.22);
     }
 
     * {
@@ -281,13 +282,13 @@
       min-height: 100vh;
       margin: 0;
       overflow-x: hidden;
-      color: var(--text);
+      color: var(--ink);
       font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
       background:
-        radial-gradient(circle at 18% 18%, rgba(75, 124, 255, 0.35), transparent 28rem),
-        radial-gradient(circle at 82% 12%, rgba(255, 79, 216, 0.28), transparent 26rem),
-        radial-gradient(circle at 50% 88%, rgba(54, 246, 255, 0.18), transparent 30rem),
-        linear-gradient(135deg, #03040b 0%, #071124 44%, #11071f 100%);
+        radial-gradient(circle at 12% 18%, rgba(61, 247, 255, 0.32), transparent 28rem),
+        radial-gradient(circle at 88% 16%, rgba(255, 62, 219, 0.28), transparent 28rem),
+        radial-gradient(circle at 48% 105%, rgba(141, 92, 255, 0.34), transparent 32rem),
+        linear-gradient(140deg, #02040d 0%, #07112c 46%, #14051f 100%);
     }
 
     body::before,
@@ -302,345 +303,541 @@
       background-image:
         linear-gradient(var(--line) 1px, transparent 1px),
         linear-gradient(90deg, var(--line) 1px, transparent 1px);
-      background-size: 72px 72px;
-      mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 78%, transparent 100%);
-      animation: gridDrift 18s linear infinite;
-      opacity: 0.72;
+      background-size: 84px 84px;
+      mask-image: linear-gradient(to bottom, transparent, #000 16%, #000 78%, transparent);
+      transform: perspective(620px) rotateX(56deg) scale(1.45) translateY(15vh);
+      transform-origin: center bottom;
+      animation: floorMove 14s linear infinite;
+      opacity: 0.78;
     }
 
     body::after {
       background:
-        repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 4px),
-        radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.46) 100%);
+        repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 5px),
+        radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.55) 100%);
       mix-blend-mode: screen;
-      opacity: 0.42;
+      opacity: 0.45;
     }
 
-    @keyframes gridDrift {
+    @keyframes floorMove {
       from { background-position: 0 0, 0 0; }
-      to { background-position: 0 72px, 72px 0; }
+      to { background-position: 0 84px, 84px 0; }
     }
 
-    .page-shell {
+    .site-shell {
       position: relative;
       z-index: 1;
-      width: min(1120px, calc(100% - 32px));
+      width: min(1180px, calc(100% - 28px));
       min-height: 100vh;
       margin: 0 auto;
-      padding: 44px 0;
+      padding: 28px 0 34px;
       display: grid;
-      place-items: center;
+      grid-template-rows: auto 1fr auto;
+      gap: 22px;
     }
 
-    .holo-stage {
-      position: relative;
-      width: 100%;
-      padding: clamp(24px, 5vw, 56px);
-      overflow: hidden;
-      border: 1px solid rgba(103, 236, 255, 0.36);
-      border-radius: 34px;
+    .top-bar,
+    .command-deck,
+    .museum-stage,
+    .panel-card {
+      border: 1px solid rgba(106, 233, 255, 0.28);
       background:
-        linear-gradient(135deg, rgba(255, 255, 255, 0.1), transparent 24%),
-        var(--panel);
+        linear-gradient(135deg, rgba(255, 255, 255, 0.1), transparent 34%),
+        var(--glass);
       box-shadow:
-        0 0 0 1px rgba(255, 255, 255, 0.08) inset,
-        0 24px 80px rgba(0, 0, 0, 0.46),
-        0 0 58px rgba(54, 246, 255, 0.18);
+        0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+        0 22px 70px rgba(0, 0, 0, 0.38),
+        0 0 46px rgba(61, 247, 255, 0.12);
       backdrop-filter: blur(18px);
     }
 
-    .holo-stage::before {
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 16px;
+      border-radius: 999px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 900;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      background:
+        conic-gradient(from 180deg, var(--cyan), var(--pink), var(--purple), var(--cyan));
+      box-shadow: 0 0 24px rgba(61, 247, 255, 0.42);
+    }
+
+    .system-status {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+      color: var(--soft);
+      background: rgba(255, 255, 255, 0.06);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }
+
+    .status-pill::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 12px var(--green);
+    }
+
+    .museum-stage {
+      position: relative;
+      overflow: hidden;
+      align-self: center;
+      min-height: 620px;
+      padding: clamp(24px, 4vw, 54px);
+      border-radius: 38px;
+    }
+
+    .museum-stage::before {
       content: "";
       position: absolute;
-      width: 560px;
-      height: 560px;
-      right: -210px;
-      top: -180px;
+      inset: 10% -12% auto auto;
+      width: min(56vw, 620px);
+      aspect-ratio: 1;
       border-radius: 50%;
       background:
-        conic-gradient(from 160deg, rgba(54, 246, 255, 0.12), rgba(255, 79, 216, 0.35), rgba(75, 124, 255, 0.12), rgba(54, 246, 255, 0.12));
-      filter: blur(2px);
-      animation: orbit 16s linear infinite;
+        radial-gradient(circle, rgba(255, 255, 255, 0.88) 0 3%, rgba(61, 247, 255, 0.55) 4% 10%, transparent 11%),
+        conic-gradient(from 40deg, transparent, rgba(61, 247, 255, 0.3), rgba(255, 62, 219, 0.34), rgba(141, 92, 255, 0.26), transparent);
+      filter: blur(0.2px);
+      animation: rotateBeam 18s linear infinite;
+      opacity: 0.86;
     }
 
-    .holo-stage::after {
-      content: "PILOTON FUTURE MUSEUM";
+    .museum-stage::after {
+      content: "FUTURE MUSEUM";
       position: absolute;
-      right: -58px;
-      bottom: 34px;
-      color: rgba(255, 255, 255, 0.05);
-      font-size: clamp(48px, 9vw, 116px);
-      font-weight: 900;
-      letter-spacing: 0.06em;
+      left: clamp(18px, 5vw, 62px);
+      bottom: 8px;
+      color: rgba(255, 255, 255, 0.055);
+      font-size: clamp(42px, 9vw, 132px);
+      font-weight: 1000;
+      letter-spacing: 0.08em;
       white-space: nowrap;
-      transform: rotate(-6deg);
     }
 
-    @keyframes orbit {
+    @keyframes rotateBeam {
       to { transform: rotate(360deg); }
     }
 
-    .hero {
+    .hero-grid {
       position: relative;
       z-index: 1;
       display: grid;
-      grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
-      gap: clamp(24px, 5vw, 52px);
+      grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr);
+      gap: clamp(24px, 5vw, 58px);
       align-items: center;
+      min-height: 520px;
     }
 
-    .eyebrow {
+    .kicker {
       display: inline-flex;
       align-items: center;
       gap: 10px;
       width: fit-content;
-      padding: 8px 14px;
-      border: 1px solid rgba(54, 246, 255, 0.42);
+      padding: 9px 14px;
+      border: 1px solid rgba(124, 255, 196, 0.36);
       border-radius: 999px;
-      color: var(--lime);
-      background: rgba(54, 246, 255, 0.08);
-      font-size: 13px;
-      font-weight: 700;
+      color: var(--green);
+      background: rgba(124, 255, 196, 0.08);
+      font-size: 12px;
+      font-weight: 900;
       letter-spacing: 0.18em;
       text-transform: uppercase;
-      box-shadow: 0 0 24px rgba(54, 246, 255, 0.16);
+      box-shadow: 0 0 22px rgba(124, 255, 196, 0.16);
     }
 
-    .eyebrow::before {
+    .kicker::before {
       content: "";
-      width: 8px;
-      height: 8px;
+      width: 9px;
+      height: 9px;
       border-radius: 50%;
-      background: var(--cyan);
-      box-shadow: 0 0 14px var(--cyan), 0 0 28px var(--cyan);
+      background: var(--green);
+      box-shadow: 0 0 16px var(--green), 0 0 32px var(--green);
     }
 
     h1 {
-      margin: 22px 0 16px;
-      font-size: clamp(48px, 10vw, 116px);
-      line-height: 0.9;
-      letter-spacing: -0.08em;
-      text-shadow: 0 0 28px rgba(54, 246, 255, 0.32);
+      margin: 22px 0 18px;
+      font-size: clamp(54px, 10vw, 124px);
+      line-height: 0.88;
+      letter-spacing: -0.085em;
+      text-shadow: 0 0 30px rgba(61, 247, 255, 0.28);
     }
 
-    .gradient-text {
+    .title-line {
       display: block;
-      background: linear-gradient(90deg, #fff 0%, var(--cyan) 38%, var(--pink) 74%, #fff 100%);
+    }
+
+    .gradient-title {
+      display: block;
+      background: linear-gradient(92deg, #fff 0%, var(--cyan) 32%, var(--pink) 66%, var(--orange) 100%);
       -webkit-background-clip: text;
       background-clip: text;
       color: transparent;
-      filter: drop-shadow(0 0 18px rgba(255, 79, 216, 0.22));
+      filter: drop-shadow(0 0 22px rgba(255, 62, 219, 0.26));
     }
 
     .lead {
-      max-width: 650px;
+      max-width: 620px;
       margin: 0;
-      color: var(--muted);
+      color: var(--soft);
       font-size: clamp(16px, 2vw, 21px);
-      line-height: 1.85;
+      line-height: 1.9;
     }
 
-    .control-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 14px;
-      margin-top: 30px;
+    .link-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 34px;
     }
 
-    .button {
+    .portal-link {
       position: relative;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 54px;
-      padding: 0 22px;
+      min-height: 116px;
+      padding: 16px;
       overflow: hidden;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 18px;
-      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 24px;
+      color: var(--ink);
       background:
-        linear-gradient(135deg, rgba(54, 246, 255, 0.22), rgba(255, 79, 216, 0.18)),
-        rgba(255, 255, 255, 0.08);
-      cursor: pointer;
-      font-size: 16px;
-      font-weight: 800;
-      letter-spacing: 0.02em;
+        linear-gradient(135deg, rgba(61, 247, 255, 0.18), rgba(255, 62, 219, 0.08)),
+        rgba(255, 255, 255, 0.07);
       text-decoration: none;
-      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.26), 0 0 22px rgba(54, 246, 255, 0.12);
       transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
     }
 
-    .button::before {
+    .portal-link::before {
       content: "";
       position: absolute;
-      inset: 0;
-      background: linear-gradient(120deg, transparent 0%, rgba(255, 255, 255, 0.34) 45%, transparent 70%);
-      transform: translateX(-120%);
-      transition: transform 0.55s ease;
+      inset: -80% -35% auto auto;
+      width: 120px;
+      height: 220px;
+      background: rgba(255, 255, 255, 0.28);
+      transform: rotate(28deg) translateX(-120px);
+      transition: transform 0.48s ease;
     }
 
-    .button:hover,
-    .button:focus-visible {
-      transform: translateY(-4px) scale(1.02);
-      border-color: rgba(54, 246, 255, 0.72);
-      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34), 0 0 34px rgba(54, 246, 255, 0.28);
+    .portal-link:hover,
+    .portal-link:focus-visible {
+      transform: translateY(-6px);
+      border-color: rgba(61, 247, 255, 0.64);
+      box-shadow: 0 18px 38px rgba(0, 0, 0, 0.32), 0 0 28px rgba(61, 247, 255, 0.2);
       outline: none;
     }
 
-    .button:hover::before,
-    .button:focus-visible::before {
-      transform: translateX(120%);
+    .portal-link:hover::before,
+    .portal-link:focus-visible::before {
+      transform: rotate(28deg) translateX(160px);
     }
 
-    .button span {
+    .portal-index {
+      display: block;
+      color: var(--cyan);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.16em;
+    }
+
+    .portal-title {
       position: relative;
       z-index: 1;
+      display: block;
+      margin-top: 18px;
+      font-size: 17px;
+      font-weight: 900;
+      line-height: 1.35;
     }
 
-    .dashboard {
-      position: relative;
+    .gallery-side {
       display: grid;
-      gap: 18px;
+      gap: 16px;
     }
 
-    .core-orb {
+    .holo-orb {
       position: relative;
+      width: min(100%, 410px);
       aspect-ratio: 1;
-      width: min(100%, 360px);
       margin: 0 auto;
-      border-radius: 50%;
+      border: 1px solid rgba(117, 245, 255, 0.42);
+      border-radius: 44% 56% 48% 52% / 48% 42% 58% 52%;
       background:
-        radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.95) 0 4%, rgba(54, 246, 255, 0.82) 5% 15%, transparent 16%),
-        radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.72), transparent 18%),
-        radial-gradient(circle, rgba(54, 246, 255, 0.12), rgba(183, 108, 255, 0.08) 38%, transparent 64%);
-      border: 1px solid rgba(103, 236, 255, 0.44);
-      box-shadow: 0 0 42px rgba(54, 246, 255, 0.22), inset 0 0 42px rgba(54, 246, 255, 0.16);
-      animation: pulse 4s ease-in-out infinite;
+        radial-gradient(circle at 46% 48%, #fff 0 3%, rgba(61, 247, 255, 0.78) 4% 12%, transparent 13%),
+        radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.76), transparent 18%),
+        radial-gradient(circle, rgba(61, 247, 255, 0.18), rgba(141, 92, 255, 0.12) 42%, transparent 68%);
+      box-shadow:
+        0 0 46px rgba(61, 247, 255, 0.28),
+        inset 0 0 58px rgba(61, 247, 255, 0.16);
+      animation: floatOrb 4.4s ease-in-out infinite;
     }
 
-    .core-orb::before,
-    .core-orb::after {
+    .holo-orb::before,
+    .holo-orb::after {
       content: "";
       position: absolute;
-      inset: 12%;
-      border: 1px solid rgba(255, 255, 255, 0.22);
+      inset: 13%;
+      border: 1px solid rgba(255, 255, 255, 0.28);
       border-radius: 50%;
     }
 
-    .core-orb::before {
-      transform: rotateX(68deg) rotateZ(-18deg);
-      box-shadow: 0 0 28px rgba(255, 79, 216, 0.2);
+    .holo-orb::before {
+      transform: rotateX(68deg) rotateZ(-20deg);
+      box-shadow: 0 0 30px rgba(255, 62, 219, 0.24);
     }
 
-    .core-orb::after {
-      transform: rotateX(68deg) rotateZ(58deg);
-      box-shadow: 0 0 28px rgba(54, 246, 255, 0.18);
+    .holo-orb::after {
+      transform: rotateX(68deg) rotateZ(56deg);
+      box-shadow: 0 0 30px rgba(61, 247, 255, 0.24);
     }
 
-    @keyframes pulse {
-      50% { transform: translateY(-8px); filter: saturate(1.22); }
+    @keyframes floatOrb {
+      50% { transform: translateY(-10px) scale(1.015); filter: saturate(1.25); }
     }
 
-    .info-card {
-      position: relative;
-      z-index: 1;
-      padding: 18px;
-      border: 1px solid rgba(103, 236, 255, 0.24);
+    .mini-panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .panel-card {
+      min-width: 0;
+      padding: 16px;
       border-radius: 22px;
-      background: var(--panel-strong);
-      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
-      backdrop-filter: blur(14px);
+      background-color: var(--glass-strong);
     }
 
-    .info-card p {
-      margin: 0 0 8px;
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 800;
-      letter-spacing: 0.16em;
+    .panel-label {
+      margin: 0 0 10px;
+      color: var(--soft);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
     }
 
-    .visitor-counter {
-      text-align: left;
-    }
-
     #counter-container {
-      color: var(--text);
-      font-size: 14px;
+      color: var(--ink);
+      font-size: 13px;
       word-break: break-word;
     }
 
-    #counter-container a {
+    #counter-container a,
+    .social-link {
       color: var(--cyan);
+      text-decoration: none;
     }
 
-    .social-links {
+    .social-copy {
+      margin: 0 0 8px;
+      font-size: 15px;
+      font-weight: 900;
+    }
+
+    .command-deck {
+      position: relative;
+      z-index: 2;
       display: grid;
+      grid-template-columns: minmax(180px, 0.72fr) minmax(260px, 1fr) minmax(160px, 0.55fr);
+      gap: 14px;
+      align-items: center;
+      padding: 14px;
+      border-radius: 28px;
+    }
+
+    .deck-block {
+      min-height: 86px;
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.07);
+    }
+
+    .music-player {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 14px;
+      align-items: center;
+      border-color: rgba(255, 177, 74, 0.34);
+      background:
+        linear-gradient(135deg, rgba(255, 177, 74, 0.18), rgba(255, 62, 219, 0.12)),
+        rgba(255, 255, 255, 0.08);
+      box-shadow: 0 0 28px rgba(255, 177, 74, 0.12) inset;
+    }
+
+    .album-art {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      border-radius: 18px;
+      background: conic-gradient(from 40deg, var(--orange), var(--pink), var(--purple), var(--cyan), var(--orange));
+      box-shadow: 0 0 24px rgba(255, 62, 219, 0.26);
+      font-size: 26px;
+    }
+
+    .track-title {
+      margin: 0 0 8px;
+      color: var(--ink);
+      font-size: 16px;
+      font-weight: 900;
+    }
+
+    audio {
+      width: 100%;
+      height: 34px;
+      accent-color: var(--orange);
+      filter: drop-shadow(0 0 16px rgba(255, 177, 74, 0.22));
+    }
+
+    .like-zone {
+      display: grid;
+      place-items: stretch;
+      padding: 0;
+      overflow: hidden;
+      border-color: rgba(255, 62, 219, 0.36);
+      background: linear-gradient(135deg, rgba(255, 62, 219, 0.18), rgba(61, 247, 255, 0.1));
+    }
+
+    .like-button {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      color: var(--ink);
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 1000;
+      letter-spacing: 0.04em;
+      transition: transform 0.18s ease, background 0.18s ease;
+    }
+
+    .like-button:hover,
+    .like-button:focus-visible {
+      background: rgba(255, 255, 255, 0.08);
+      outline: none;
+    }
+
+    .like-button:active {
+      transform: scale(0.96);
+    }
+
+    .like-icon {
+      display: block;
+      font-size: 26px;
+      filter: drop-shadow(0 0 16px rgba(255, 62, 219, 0.44));
+    }
+
+    .like-count {
+      display: block;
+      margin-top: 2px;
+      color: var(--green);
+      font-size: 13px;
+    }
+
+    .quick-info {
+      display: grid;
+      align-content: center;
       gap: 8px;
     }
 
-    .social-links p,
-    .social-links a,
-    .audio-player p {
-      margin: 0;
-      color: var(--text);
-      font-size: 16px;
-      font-weight: 800;
-      text-decoration: none;
-      text-shadow: 0 0 16px rgba(255, 79, 216, 0.34);
-    }
-
-    .social-links a:hover {
+    .quick-info strong {
       color: var(--cyan);
+      font-size: 13px;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
     }
 
-    .audio-player {
-      margin-top: 18px;
-    }
-
-    .audio-player audio {
-      width: 100%;
-      margin-top: 10px;
-      accent-color: var(--cyan);
-      filter: drop-shadow(0 0 18px rgba(54, 246, 255, 0.18));
+    .quick-info span {
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.55;
     }
 
     .cursor-effect {
       position: fixed;
-      z-index: 3;
-      width: 120px;
-      height: 120px;
+      z-index: 5;
+      width: 150px;
+      height: 150px;
       border-radius: 50%;
       pointer-events: none;
-      background: radial-gradient(circle, rgba(54, 246, 255, 0.38), rgba(255, 79, 216, 0.14) 42%, transparent 72%);
-      filter: blur(14px);
+      background: radial-gradient(circle, rgba(61, 247, 255, 0.34), rgba(255, 62, 219, 0.18) 40%, transparent 70%);
+      filter: blur(16px);
       mix-blend-mode: screen;
       transform: translate(-50%, -50%);
       opacity: 0;
       transition: opacity 0.2s ease;
     }
 
-    @media (max-width: 840px) {
-      body {
-        overflow-y: auto;
+    @media (max-width: 920px) {
+      .site-shell {
+        padding-top: 16px;
       }
 
-      .page-shell {
-        padding: 20px 0;
+      .top-bar,
+      .command-deck {
+        border-radius: 24px;
       }
 
-      .hero {
+      .top-bar,
+      .command-deck,
+      .hero-grid {
         grid-template-columns: 1fr;
       }
 
-      .holo-stage {
-        border-radius: 26px;
+      .top-bar,
+      .system-status {
+        justify-content: center;
       }
 
-      .control-row,
-      .button {
-        width: 100%;
+      .museum-stage {
+        min-height: auto;
+        border-radius: 30px;
+      }
+
+      .link-grid,
+      .mini-panels {
+        grid-template-columns: 1fr;
+      }
+
+      .portal-link {
+        min-height: 86px;
+      }
+
+      .holo-orb {
+        width: min(78vw, 340px);
       }
     }
 
@@ -657,58 +854,92 @@
   </style>
 </head>
 <body>
-  <main class="page-shell">
-    <section class="holo-stage" aria-label="ぴーちゃんの家 ホーム">
-      <div class="hero">
+  <main class="site-shell">
+    <header class="top-bar" aria-label="サイトヘッダー">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        Pii-chan Future Museum
+      </div>
+      <div class="system-status" aria-label="システム状態">
+        <span class="status-pill">Online</span>
+        <span class="status-pill">Neon Mode</span>
+        <span class="status-pill">Welcome</span>
+      </div>
+    </header>
+
+    <section class="museum-stage" aria-label="ぴーちゃんの未来館 ホーム">
+      <div class="hero-grid">
         <div class="hero-copy">
-          <div class="eyebrow">Future Home Terminal</div>
+          <div class="kicker">Hologram Entrance</div>
           <h1>
-            ぴーちゃんの
-            <span class="gradient-text">未来の家</span>
+            <span class="title-line">ぴーちゃんの</span>
+            <span class="gradient-title">未来館</span>
           </h1>
           <p class="lead">
-            ネオン、ホログラム、デジタルグリッドで作った小さな未来館。
-            ルーレットや放置用ツールへ、ここからアクセスできます。
+            ネオンの入口から、遊び場ツールと音楽プレイヤーへアクセス。
+            近未来の展示室みたいに、光るパネルとホログラムでまとめました。
           </p>
 
-          <div class="control-row" aria-label="コンテンツへのリンク">
-            <button class="button" onclick="location.href='roulette.html'">
-              <span>ルーレット</span>
-            </button>
-            <button class="button" onclick="location.href='idle.html'">
-              <span>放置用文字表示</span>
-            </button>
-            <button class="button" onclick="location.href='phub-logo.html'">
-              <span>Phubロゴジェネレーター</span>
-            </button>
-          </div>
+          <nav class="link-grid" aria-label="コンテンツへのリンク">
+            <a class="portal-link" href="roulette.html">
+              <span class="portal-index">GATE 01</span>
+              <span class="portal-title">ルーレット</span>
+            </a>
+            <a class="portal-link" href="idle.html">
+              <span class="portal-index">GATE 02</span>
+              <span class="portal-title">放置用文字表示</span>
+            </a>
+            <a class="portal-link" href="phub-logo.html">
+              <span class="portal-index">GATE 03</span>
+              <span class="portal-title">Phubロゴジェネレーター</span>
+            </a>
+          </nav>
         </div>
 
-        <aside class="dashboard" aria-label="サイト情報">
-          <div class="core-orb" aria-hidden="true"></div>
+        <aside class="gallery-side" aria-label="サイト情報">
+          <div class="holo-orb" aria-hidden="true"></div>
+          <div class="mini-panels">
+            <section class="panel-card visitor-counter" aria-label="訪問者カウンター">
+              <p class="panel-label">Visitor Scan</p>
+              <div id="counter-container">
+                <script type="text/javascript" src="https://www.free-counters.org/count/hokk"></script><br>
+                <a href="http://www.freevisitorcounters.com">www.freevisitorcounters.com</a>
+                <script type="text/javascript" src="https://whomania.com/ctr?id=0c936d902131d12709a128c561ad42ff371ef2a2"></script>
+              </div>
+            </section>
 
-          <div class="info-card visitor-counter">
-            <p>Visitor Scan</p>
-            <div id="counter-container">
-              <script type="text/javascript" src="https://www.free-counters.org/count/hokk"></script><br>
-              <a href="http://www.freevisitorcounters.com">www.freevisitorcounters.com</a>
-              <script type="text/javascript" src="https://whomania.com/ctr?id=0c936d902131d12709a128c561ad42ff371ef2a2"></script>
-            </div>
-          </div>
-
-          <div class="info-card social-links">
-            <p>Discord: japan_2</p>
-            <a href="https://x.com/Y1111111111113" target="_blank" rel="noopener noreferrer">X: @Y1111111111113</a>
-          </div>
-
-          <div class="info-card audio-player">
-            <p>🎵 なとり プロポーズ 🎵</p>
-            <audio id="audio-player" controls autoplay muted>
-              <source src="https://files.catbox.moe/devb4i.mp3" type="audio/mpeg">
-              Your browser does not support the audio element.
-            </audio>
+            <section class="panel-card social-panel" aria-label="SNSリンク">
+              <p class="panel-label">Connect</p>
+              <p class="social-copy">Discord: japan_2</p>
+              <a class="social-link" href="https://x.com/Y1111111111113" target="_blank" rel="noopener noreferrer">X: @Y1111111111113</a>
+            </section>
           </div>
         </aside>
+      </div>
+    </section>
+
+    <section class="command-deck" aria-label="下部コントロール">
+      <div class="deck-block quick-info">
+        <strong>Current Exhibit</strong>
+        <span>音楽・リンク・いいねを下のデッキに集約しました。</span>
+      </div>
+
+      <div class="deck-block music-player">
+        <div class="album-art" aria-hidden="true">♪</div>
+        <div>
+          <p class="track-title">なとり - プロポーズ</p>
+          <audio id="audio-player" controls autoplay muted>
+            <source src="https://files.catbox.moe/devb4i.mp3" type="audio/mpeg">
+            Your browser does not support the audio element.
+          </audio>
+        </div>
+      </div>
+
+      <div class="deck-block like-zone">
+        <button class="like-button" id="like-button" type="button" aria-label="いいねする">
+          <span class="like-icon">♡ いいね</span>
+          <span class="like-count" id="like-count">0 likes</span>
+        </button>
       </div>
     </section>
   </main>
@@ -719,6 +950,24 @@
     const audioPlayer = document.getElementById('audio-player');
     audioPlayer.volume = 0.04;
     audioPlayer.muted = false;
+
+    const likeButton = document.getElementById('like-button');
+    const likeCount = document.getElementById('like-count');
+    const storageKey = 'piichan-home-likes';
+    const savedLikes = Number(localStorage.getItem(storageKey) || 0);
+    let likes = Number.isNaN(savedLikes) ? 0 : savedLikes;
+
+    const renderLikes = () => {
+      likeCount.textContent = `${likes} likes`;
+    };
+
+    renderLikes();
+
+    likeButton.addEventListener('click', () => {
+      likes += 1;
+      localStorage.setItem(storageKey, String(likes));
+      renderLikes();
+    });
 
     const cursorEffect = document.getElementById('cursor-effect');
     document.addEventListener('mousemove', (event) => {
