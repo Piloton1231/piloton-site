@@ -224,6 +224,28 @@
     .message.error { color: var(--danger); }
     .message.success { color: var(--green); }
 
+    .fallback-panel {
+      margin-top: 24px;
+      padding: 20px;
+      border: 1px solid rgba(170, 92, 255, 0.32);
+      border-radius: 22px;
+      background: rgba(170, 92, 255, 0.07);
+    }
+
+    .fallback-panel label { font-size: 15px; }
+
+    .route-tag {
+      display: inline-block;
+      margin-bottom: 10px;
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+    }
+
     .info-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -285,12 +307,22 @@
       <div class="divider" aria-hidden="true"></div>
 
       <span class="step-label">Step 02</span>
-      <label for="vrchat-url">VRChatに貼るURL</label>
+      <label for="vrchat-url">メイン：Piloton専用リンク</label>
       <div class="output-row">
         <input id="vrchat-url" type="text" readonly placeholder="ここに変換後のURLが表示されます">
         <button class="secondary" id="copy-button" type="button" disabled>コピー</button>
       </div>
       <p class="message" id="copy-message" role="status" aria-live="polite"></p>
+
+      <div class="fallback-panel">
+        <span class="route-tag">BACKUP</span>
+        <label for="ksync-url">予備：Ksyncリンク</label>
+        <div class="output-row">
+          <input id="ksync-url" type="text" readonly placeholder="メインが使えない時の予備リンクです">
+          <button class="secondary" id="ksync-copy-button" type="button" disabled>予備をコピー</button>
+        </div>
+        <p class="message" id="ksync-copy-message" role="status" aria-live="polite">メインリンクで再生できない時だけお使いください。</p>
+      </div>
     </section>
 
     <section class="info-grid" aria-label="使い方">
@@ -300,19 +332,23 @@
     </section>
 
     <aside class="notice">
-      この機能は外部の変換サービス（r.0cm.org / ksync.arcanescripts.com）を利用します。入力したYouTube URLとアクセス情報は各サービスへ送信され、提供状況によっては利用できなくなる場合があります。非公開・年齢制限・有料コンテンツには対応しません。Googleアカウント情報は入力しないでください。VRChat側で「Allow Untrusted URLs」が必要になる場合があります。動画の権利と各サービスの利用規約を守って使用してください。
+      メインリンクはPiloton管理の変換機能を利用します。予備リンクは外部サービス（r.0cm.org / ksync.arcanescripts.com）を利用するため、入力したYouTube URLとアクセス情報が各サービスへ送信されます。非公開・年齢制限・有料コンテンツには対応しません。Googleアカウント情報は入力しないでください。VRChat側で「Allow Untrusted URLs」が必要になる場合があります。動画の権利と各サービスの利用規約を守って使用してください。
     </aside>
   </main>
 
   <script>
+    const ownResolverBaseUrl = 'https://video.piloton.cc/resolve';
     const redirectorBaseUrl = 'https://r.0cm.org/?url=';
     const ksyncBaseUrl = 'https://ksync.arcanescripts.com/custom/redir-url?videoUrl=';
     const youtubeInput = document.getElementById('youtube-url');
     const vrchatOutput = document.getElementById('vrchat-url');
+    const ksyncOutput = document.getElementById('ksync-url');
     const createButton = document.getElementById('create-button');
     const copyButton = document.getElementById('copy-button');
+    const ksyncCopyButton = document.getElementById('ksync-copy-button');
     const inputMessage = document.getElementById('input-message');
     const copyMessage = document.getElementById('copy-message');
+    const ksyncCopyMessage = document.getElementById('ksync-copy-message');
 
     const isYouTubeUrl = (value) => {
       try {
@@ -327,18 +363,24 @@
     const createVrchatUrl = () => {
       const value = youtubeInput.value.trim();
       copyMessage.textContent = '';
+      ksyncCopyMessage.textContent = 'メインリンクで再生できない時だけお使いください。';
+      ksyncCopyMessage.className = 'message';
       if (!isYouTubeUrl(value)) {
         inputMessage.textContent = 'HTTPSのYouTube URLを入力してください。';
         inputMessage.className = 'message error';
         vrchatOutput.value = '';
+        ksyncOutput.value = '';
         copyButton.disabled = true;
+        ksyncCopyButton.disabled = true;
         return;
       }
 
-      const resolverUrl = `${ksyncBaseUrl}${encodeURIComponent(value)}`;
-      vrchatOutput.value = `${redirectorBaseUrl}${encodeURIComponent(resolverUrl)}`;
+      vrchatOutput.value = `${ownResolverBaseUrl}?url=${encodeURIComponent(value)}`;
+      const ksyncResolverUrl = `${ksyncBaseUrl}${encodeURIComponent(value)}`;
+      ksyncOutput.value = `${redirectorBaseUrl}${encodeURIComponent(ksyncResolverUrl)}`;
       copyButton.disabled = false;
-      inputMessage.textContent = 'VRChat用URLを作成しました。';
+      ksyncCopyButton.disabled = false;
+      inputMessage.textContent = 'メインとKsync予備の2種類を作成しました。';
       inputMessage.className = 'message success';
     };
 
@@ -347,18 +389,25 @@
       if (event.key === 'Enter') createVrchatUrl();
     });
 
-    copyButton.addEventListener('click', async () => {
-      if (!vrchatOutput.value) return;
+    const copyUrl = async (output, message) => {
+      if (!output.value) return;
       try {
-        await navigator.clipboard.writeText(vrchatOutput.value);
-        copyMessage.textContent = 'コピーしました。VRChatの動画プレイヤーへ貼り付けてください。';
-        copyMessage.className = 'message success';
+        await navigator.clipboard.writeText(output.value);
+        message.textContent = 'コピーしました。VRChatの動画プレイヤーへ貼り付けてください。';
+        message.className = 'message success';
       } catch {
-        vrchatOutput.select();
-        copyMessage.textContent = '自動コピーできなかったため、選択したURLを手動でコピーしてください。';
-        copyMessage.className = 'message error';
+        output.select();
+        message.textContent = '自動コピーできなかったため、選択したURLを手動でコピーしてください。';
+        message.className = 'message error';
       }
-    });
+    };
+
+    copyButton.addEventListener('click', () => copyUrl(vrchatOutput, copyMessage));
+    ksyncCopyButton.addEventListener('click', () => copyUrl(ksyncOutput, ksyncCopyMessage));
+
+    window.addEventListener('load', () => {
+      fetch('https://video.piloton.cc/health', { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+    }, { once: true });
   </script>
 </body>
 </html>

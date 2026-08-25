@@ -2,9 +2,11 @@
 
 `vrchat-youtube.html` が作成するURLを受け取り、公開YouTube動画の互換ストリームへHTTP 307で転送する小さなバックエンドです。動画本体は中継しません。
 
-[Renderへ無料でデプロイ](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FPiloton1231%2Fpiloton-site)
+## Vercelで無料運用
 
-無料で試す場合は上のリンクを開き、GitHubでログインして内容を確認したうえでデプロイします。`render.yaml` によりDocker版がシンガポールへ作成されます。無料枠は無通信が続くと停止するため、最初のアクセスに時間がかかる場合があります。
+個人利用はVercelのHobbyプランを利用できます。VercelへGitHubでログインして `Piloton1231/piloton-site` をImportし、Root Directoryを `resolver` にしてデプロイします。FastAPIは自動検出され、`vercel.json` によりシンガポールで実行されます。
+
+デプロイ完了後、VercelのProject Settings → Domainsへ `video.piloton.cc` を追加します。表示されたCNAMEの宛先をPorkbun DNSへ登録し、`https://video.piloton.cc/health` が `{"status":"ok"}` を返せば完了です。
 
 ## 構成
 
@@ -25,7 +27,7 @@
 5. `docker compose up -d --build` を実行します。
 6. `https://video.piloton.cc/health` が `{"status":"ok"}` を返すことを確認します。
 
-Renderを利用する場合、上記のVPS向け手順は不要です。Renderでデプロイ完了後、Custom Domainsに表示される案内どおり、Porkbunへ `video` のCNAMEレコードを追加します。
+Vercelを利用する場合、上記のVPS向け手順は不要です。
 
 CaddyがHTTPS証明書を自動取得するため、サーバーのTCP 80番・443番ポートを公開する必要があります。サーバー管理画面やSSHは一般公開せず、OSとコンテナを定期的に更新してください。
 
