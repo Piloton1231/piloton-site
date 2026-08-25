@@ -1,0 +1,31 @@
+services:
+  resolver:
+    build: .
+    restart: unless-stopped
+    environment:
+      CACHE_SECONDS: "180"
+      RATE_LIMIT: "12"
+      RATE_WINDOW_SECONDS: "60"
+      MAX_CONCURRENT_EXTRACTS: "2"
+      PLAYER_CLIENT: "android_vr"
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - resolver
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      RESOLVER_DOMAIN: ${RESOLVER_DOMAIN:-video.piloton.cc}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

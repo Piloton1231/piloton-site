@@ -1,0 +1,17 @@
+{$RESOLVER_DOMAIN} {
+  encode zstd gzip
+
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy no-referrer
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+
+  @allowed path /resolve /health
+  handle @allowed {
+    reverse_proxy resolver:8000
+  }
+
+  respond "Not found" 404
+}
