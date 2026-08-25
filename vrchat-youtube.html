@@ -165,9 +165,11 @@
     .input-row,
     .output-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
       gap: 12px;
     }
+
+    .input-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+    .output-row { grid-template-columns: minmax(0, 1fr) auto; }
 
     input {
       width: 100%;
@@ -206,6 +208,13 @@
     button:hover, button:focus-visible { transform: translateY(-2px); filter: brightness(1.08); outline: none; }
     button:active { transform: scale(0.98); }
     button.secondary { color: #fff; background: linear-gradient(135deg, var(--purple), var(--pink)); }
+    button.ghost {
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: var(--soft);
+      background: rgba(255, 255, 255, 0.07);
+      box-shadow: none;
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; filter: none; }
 
     .divider {
       height: 1px;
@@ -301,6 +310,7 @@
       <div class="input-row">
         <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=...">
         <button id="create-button" type="button">URLを作る</button>
+        <button class="ghost" id="clear-button" type="button" disabled>クリア</button>
       </div>
       <p class="message" id="input-message" role="status" aria-live="polite">youtube.com または youtu.be の公開動画URLを入力してください。</p>
 
@@ -344,11 +354,14 @@
     const vrchatOutput = document.getElementById('vrchat-url');
     const ksyncOutput = document.getElementById('ksync-url');
     const createButton = document.getElementById('create-button');
+    const clearButton = document.getElementById('clear-button');
     const copyButton = document.getElementById('copy-button');
     const ksyncCopyButton = document.getElementById('ksync-copy-button');
     const inputMessage = document.getElementById('input-message');
     const copyMessage = document.getElementById('copy-message');
     const ksyncCopyMessage = document.getElementById('ksync-copy-message');
+    const defaultInputMessage = 'youtube.com または youtu.be の公開動画URLを入力してください。';
+    const defaultKsyncMessage = 'メインリンクで再生できない時だけお使いください。';
 
     const isYouTubeUrl = (value) => {
       try {
@@ -363,7 +376,7 @@
     const createVrchatUrl = () => {
       const value = youtubeInput.value.trim();
       copyMessage.textContent = '';
-      ksyncCopyMessage.textContent = 'メインリンクで再生できない時だけお使いください。';
+      ksyncCopyMessage.textContent = defaultKsyncMessage;
       ksyncCopyMessage.className = 'message';
       if (!isYouTubeUrl(value)) {
         inputMessage.textContent = 'HTTPSのYouTube URLを入力してください。';
@@ -384,7 +397,27 @@
       inputMessage.className = 'message success';
     };
 
+    const clearTool = () => {
+      youtubeInput.value = '';
+      vrchatOutput.value = '';
+      ksyncOutput.value = '';
+      copyButton.disabled = true;
+      ksyncCopyButton.disabled = true;
+      clearButton.disabled = true;
+      inputMessage.textContent = defaultInputMessage;
+      inputMessage.className = 'message';
+      copyMessage.textContent = '';
+      copyMessage.className = 'message';
+      ksyncCopyMessage.textContent = defaultKsyncMessage;
+      ksyncCopyMessage.className = 'message';
+      youtubeInput.focus();
+    };
+
     createButton.addEventListener('click', createVrchatUrl);
+    clearButton.addEventListener('click', clearTool);
+    youtubeInput.addEventListener('input', () => {
+      clearButton.disabled = youtubeInput.value.length === 0;
+    });
     youtubeInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') createVrchatUrl();
     });
