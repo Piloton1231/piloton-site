@@ -295,17 +295,18 @@
 
     <section class="info-grid" aria-label="使い方">
       <article class="info-card"><strong>1. URLを入力</strong><p>YouTubeの共有URLまたは視聴ページのURLを貼り付けます。</p></article>
-      <article class="info-card"><strong>2. 変換してコピー</strong><p>作成された <code>video.piloton.cc</code> のURLをコピーします。</p></article>
+      <article class="info-card"><strong>2. 変換してコピー</strong><p>作成されたVRChat用の専用URLをコピーします。</p></article>
       <article class="info-card"><strong>3. VRChatへ貼る</strong><p>ワールドの動画プレイヤーへ貼り付けます。対応はワールドや動画により異なります。</p></article>
     </section>
 
     <aside class="notice">
-      この機能は公開動画の再生補助用です。非公開・年齢制限・有料コンテンツには対応しません。Googleアカウント情報は入力しないでください。VRChat側で「Allow Untrusted URLs」が必要になる場合があります。動画の権利と各サービスの利用規約を守って使用してください。
+      この機能は外部の変換サービス（r.0cm.org / ksync.arcanescripts.com）を利用します。入力したYouTube URLとアクセス情報は各サービスへ送信され、提供状況によっては利用できなくなる場合があります。非公開・年齢制限・有料コンテンツには対応しません。Googleアカウント情報は入力しないでください。VRChat側で「Allow Untrusted URLs」が必要になる場合があります。動画の権利と各サービスの利用規約を守って使用してください。
     </aside>
   </main>
 
   <script>
-    const resolverBaseUrl = 'https://video.piloton.cc/resolve';
+    const redirectorBaseUrl = 'https://r.0cm.org/?url=';
+    const ksyncBaseUrl = 'https://ksync.arcanescripts.com/custom/redir-url?videoUrl=';
     const youtubeInput = document.getElementById('youtube-url');
     const vrchatOutput = document.getElementById('vrchat-url');
     const createButton = document.getElementById('create-button');
@@ -334,7 +335,8 @@
         return;
       }
 
-      vrchatOutput.value = `${resolverBaseUrl}?url=${encodeURIComponent(value)}`;
+      const resolverUrl = `${ksyncBaseUrl}${encodeURIComponent(value)}`;
+      vrchatOutput.value = `${redirectorBaseUrl}${encodeURIComponent(resolverUrl)}`;
       copyButton.disabled = false;
       inputMessage.textContent = 'VRChat用URLを作成しました。';
       inputMessage.className = 'message success';
