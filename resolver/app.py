@@ -3,7 +3,7 @@ import os
 import sys
 import time
 from collections import defaultdict, deque
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -29,6 +29,9 @@ CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "12")))
 RATE_WINDOW_SECONDS = max(1, int(os.getenv("RATE_WINDOW_SECONDS", "60")))
 MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
+KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "1").lower() in {"1", "true", "yes"}
+REDIRECTOR_BASE_URL = "https://r.0cm.org/?url="
+KSYNC_BASE_URL = "https://ksync.arcanescripts.com/custom/redir-url?videoUrl="
 
 _cache: dict[str, tuple[float, str]] = {}
 _requests: dict[str, deque[float]] = defaultdict(deque)
@@ -116,6 +119,11 @@ def _extract_media_url(video_url: str) -> str:
     return direct_url
 
 
+def _build_ksync_fallback_url(video_url: str) -> str:
+    ksync_url = f"{KSYNC_BASE_URL}{quote(video_url, safe='')}"
+    return f"{REDIRECTOR_BASE_URL}{quote(ksync_url, safe='')}"
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -140,6 +148,12 @@ async def resolve_video(
             direct_url = await asyncio.to_thread(_extract_media_url, video_url)
     except DownloadError as error:
         print(f"yt-dlp extraction failed: {error}", file=sys.stderr, flush=True)
+        if KSYNC_FALLBACK:
+            return RedirectResponse(
+                _build_ksync_fallback_url(video_url),
+                status_code=307,
+                headers={"Cache-Control": "no-store", "X-Resolver-Path": "ksync-fallback"},
+            )
         raise HTTPException(status_code=422, detail="YouTube could not provide a compatible stream") from error
     except (ValueError, OSError) as error:
         print(f"resolver extraction failed: {error}", file=sys.stderr, flush=True)
