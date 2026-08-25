@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import time
 from collections import defaultdict, deque
 from urllib.parse import urlsplit
@@ -138,8 +139,10 @@ async def resolve_video(
         async with _extract_slots:
             direct_url = await asyncio.to_thread(_extract_media_url, video_url)
     except DownloadError as error:
+        print(f"yt-dlp extraction failed: {error}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=422, detail="YouTube could not provide a compatible stream") from error
     except (ValueError, OSError) as error:
+        print(f"resolver extraction failed: {error}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not resolve the video") from error
 
     _cache[video_url] = (now + CACHE_SECONDS, direct_url)
