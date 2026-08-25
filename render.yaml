@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: piloton1231-vrchat-resolver
+    runtime: docker
+    plan: free
+    region: singapore
+    rootDir: resolver
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    domains:
+      - video.piloton.cc
+    envVars:
+      - key: CACHE_SECONDS
+        value: "180"
+      - key: RATE_LIMIT
+        value: "12"
+      - key: RATE_WINDOW_SECONDS
+        value: "60"
+      - key: MAX_CONCURRENT_EXTRACTS
+        value: "2"
+      - key: PLAYER_CLIENT
+        value: android_vr
