@@ -1,8 +1,10 @@
 # Piloton Direct Resolver
 
-Vercel の Node.js Function で YouTube の公開動画を、映像・音声一体型の一時的な `googlevideo.com` MP4 URLへ307転送します。動画本体は中継しません。
+Node.jsでYouTubeの公開動画を、映像・音声一体型の一時的な `googlevideo.com` MP4 URLへ307転送します。動画本体は中継しません。Vercel Functionと通常のDockerサービスの両方で起動できます。
 
 Vercelで同じGitHubリポジトリを新しいプロジェクトとしてImportし、Root Directoryを `direct-resolver` に設定します。デプロイ後は次を確認します。
+
+Docker対応サービスではRoot Directoryを `direct-resolver`、Dockerfileを `Dockerfile`、公開ポートを `8000` に設定します。
 
 - `GET /health`
 - `GET /resolve?url=<HTTPS YouTube URL>`
