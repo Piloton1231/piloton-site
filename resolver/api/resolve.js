@@ -204,7 +204,10 @@ export async function resolveDirectUrl(value) {
 
   const state = await getResolverState();
   const poToken = await state.minter.mintAsWebsafeString(videoId);
-  const videoInfo = await state.innertube.getBasicInfo(videoId, { client: "MWEB" });
+  const videoInfo = await state.innertube.getBasicInfo(videoId, {
+    client: "MWEB",
+    po_token: poToken,
+  });
   const format = videoInfo.chooseFormat({ itag: 18 });
   const deciphered = await format.decipher(state.innertube.session.player);
   const mediaUrl = new URL(deciphered);
