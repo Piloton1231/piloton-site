@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="YouTubeのURLからVRChat動画プレイヤー用URLを作成します。">
+  <meta name="description" content="YouTube動画・プレイリストをタイトル付きでVRChat動画プレイヤー用URLへ変換します。">
   <title>VRChat YouTube URL | ぴーちゃんの未来館</title>
   <style>
     :root {
@@ -59,7 +59,8 @@
 
     .top-bar,
     .tool-card,
-    .info-card {
+    .info-card,
+    .result-card {
       border: 1px solid rgba(106, 233, 255, 0.28);
       background:
         linear-gradient(135deg, rgba(255, 255, 255, 0.1), transparent 34%),
@@ -163,13 +164,13 @@
     }
 
     .input-row,
-    .output-row {
+    .link-row {
       display: grid;
       gap: 12px;
     }
 
     .input-row { grid-template-columns: minmax(0, 1fr) auto auto; }
-    .output-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .link-row { grid-template-columns: minmax(0, 1fr) auto; }
 
     input {
       width: 100%;
@@ -214,6 +215,12 @@
       background: rgba(255, 255, 255, 0.07);
       box-shadow: none;
     }
+    button.compact {
+      min-height: 48px;
+      padding: 0 18px;
+      border-radius: 15px;
+      font-size: 13px;
+    }
     button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; filter: none; }
 
     .divider {
@@ -233,15 +240,106 @@
     .message.error { color: var(--danger); }
     .message.success { color: var(--green); }
 
-    .fallback-panel {
-      margin-top: 24px;
-      padding: 20px;
-      border: 1px solid rgba(170, 92, 255, 0.32);
-      border-radius: 22px;
-      background: rgba(170, 92, 255, 0.07);
+    [hidden] { display: none !important; }
+
+    .result-summary {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
     }
 
-    .fallback-panel label { font-size: 15px; }
+    .result-summary h2 {
+      margin: 4px 0 0;
+      font-size: clamp(22px, 4vw, 34px);
+      line-height: 1.25;
+    }
+
+    .summary-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .result-list {
+      display: grid;
+      gap: 16px;
+      margin-top: 22px;
+    }
+
+    .result-card {
+      padding: clamp(18px, 3vw, 26px);
+      border-radius: 24px;
+      background-color: rgba(4, 13, 32, 0.9);
+    }
+
+    .result-card.selected {
+      border-color: rgba(124, 255, 196, 0.64);
+      box-shadow:
+        0 0 0 1px rgba(124, 255, 196, 0.14) inset,
+        0 18px 44px rgba(0, 0, 0, 0.34),
+        0 0 34px rgba(124, 255, 196, 0.16);
+    }
+
+    .video-heading {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      margin-bottom: 20px;
+    }
+
+    .position-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 56px;
+      min-height: 34px;
+      border: 1px solid rgba(61, 247, 255, 0.34);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--cyan);
+      background: rgba(61, 247, 255, 0.08);
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .selected .position-badge {
+      border-color: rgba(124, 255, 196, 0.44);
+      color: var(--green);
+      background: rgba(124, 255, 196, 0.1);
+    }
+
+    .video-title {
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-size: clamp(17px, 2.6vw, 22px);
+      line-height: 1.45;
+    }
+
+    .selected-note {
+      margin: 6px 0 0;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .link-block + .link-block { margin-top: 16px; }
+    .link-block label {
+      margin-bottom: 8px;
+      color: var(--soft);
+      font-size: 13px;
+    }
+
+    .link-row input {
+      min-height: 48px;
+      border-radius: 15px;
+      font-size: 13px;
+    }
+
+    .card-message { margin-bottom: 0; }
 
     .route-tag {
       display: inline-block;
@@ -280,10 +378,13 @@
     code { color: var(--green); word-break: break-all; }
 
     @media (max-width: 720px) {
-      .input-row, .output-row, .info-grid { grid-template-columns: 1fr; }
+      .input-row, .link-row, .info-grid { grid-template-columns: 1fr; }
       .top-bar { border-radius: 22px; }
       .brand { letter-spacing: 0.04em; }
       button { width: 100%; }
+      .result-summary { align-items: stretch; flex-direction: column; }
+      .summary-actions { justify-content: stretch; }
+      .video-heading { grid-template-columns: 1fr; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -301,142 +402,336 @@
     <section class="hero">
       <span class="kicker">VRChat Video Helper</span>
       <h1><span class="gradient-title">YouTube URL</span><br>コンバーター</h1>
-      <p class="lead">YouTubeのURLを、VRChat動画プレイヤーに貼り付けるための専用URLへ変換します。</p>
+      <p class="lead">YouTube動画やプレイリストを、タイトル付きでVRChat動画プレイヤー用URLへ変換します。</p>
     </section>
 
     <section class="tool-card" aria-label="URL変換ツール">
       <span class="step-label">Step 01</span>
       <label for="youtube-url">YouTube URL</label>
       <div class="input-row">
-        <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=...">
-        <button id="create-button" type="button">URLを作る</button>
+        <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=...&amp;list=...">
+        <button id="create-button" type="button">一覧を変換</button>
         <button class="ghost" id="clear-button" type="button" disabled>クリア</button>
       </div>
-      <p class="message" id="input-message" role="status" aria-live="polite">youtube.com または youtu.be の公開動画URLを入力してください。</p>
+      <p class="message" id="input-message" role="status" aria-live="polite">YouTubeの公開動画URLまたはプレイリストURLを入力してください。</p>
 
-      <div class="divider" aria-hidden="true"></div>
-
-      <span class="step-label">Step 02</span>
-      <label for="vrchat-url">メイン：Piloton専用リンク</label>
-      <div class="output-row">
-        <input id="vrchat-url" type="text" readonly placeholder="ここに変換後のURLが表示されます">
-        <button class="secondary" id="copy-button" type="button" disabled>コピー</button>
-      </div>
-      <p class="message" id="copy-message" role="status" aria-live="polite"></p>
-
-      <div class="fallback-panel">
-        <span class="route-tag">BACKUP</span>
-        <label for="ksync-url">予備：Ksyncリンク</label>
-        <div class="output-row">
-          <input id="ksync-url" type="text" readonly placeholder="メインが使えない時の予備リンクです">
-          <button class="secondary" id="ksync-copy-button" type="button" disabled>予備をコピー</button>
+      <section id="results" hidden>
+        <div class="divider" aria-hidden="true"></div>
+        <span class="step-label">Step 02</span>
+        <div class="result-summary">
+          <div>
+            <span class="route-tag" id="result-kind">RESULT</span>
+            <h2 id="result-title"></h2>
+          </div>
+          <div class="summary-actions">
+            <button class="compact" id="copy-all-main" type="button">メインを全件コピー</button>
+            <button class="compact secondary" id="copy-all-ksync" type="button">Ksyncを全件コピー</button>
+          </div>
         </div>
-        <p class="message" id="ksync-copy-message" role="status" aria-live="polite">メインリンクで再生できない時だけお使いください。</p>
-      </div>
+        <p class="message" id="result-message" role="status" aria-live="polite"></p>
+        <div class="result-list" id="result-list"></div>
+      </section>
     </section>
 
     <section class="info-grid" aria-label="使い方">
-      <article class="info-card"><strong>1. URLを入力</strong><p>YouTubeの共有URLまたは視聴ページのURLを貼り付けます。</p></article>
-      <article class="info-card"><strong>2. 変換してコピー</strong><p>作成されたVRChat用の専用URLをコピーします。</p></article>
-      <article class="info-card"><strong>3. VRChatへ貼る</strong><p>ワールドの動画プレイヤーへ貼り付けます。対応はワールドや動画により異なります。</p></article>
+      <article class="info-card"><strong>1. URLを入力</strong><p>単体動画、視聴中のプレイリスト、プレイリストページのURLを貼り付けます。</p></article>
+      <article class="info-card"><strong>2. タイトル付きで変換</strong><p>プレイリストは一覧で変換し、URLで選ばれていた動画を先頭に表示します。</p></article>
+      <article class="info-card"><strong>3. VRChatへ貼る</strong><p>1件ずつ、またはまとめてコピーして動画プレイヤーへ貼り付けます。</p></article>
     </section>
 
     <aside class="notice">
-      メインリンクはPiloton管理の変換機能を先に試し、YouTube側に拒否された時だけKsync予備経路へ自動で切り替えます。予備経路では外部サービス（r.0cm.org / ksync.arcanescripts.com）へYouTube URLとアクセス情報が送信されます。非公開・年齢制限・有料コンテンツには対応しません。Googleアカウント情報は入力しないでください。VRChat側で「Allow Untrusted URLs」が必要になる場合があります。動画の権利と各サービスの利用規約を守って使用してください。
+      メインリンクはPiloton管理の変換機能を先に試し、YouTube側に拒否された時だけKsync予備経路へ自動で切り替えます。予備経路では外部サービス（r.0cm.org / ksync.arcanescripts.com）へYouTube URLとアクセス情報が送信されます。プレイリストは最大200件です。非公開・年齢制限・有料コンテンツには対応しません。Googleアカウント情報は入力しないでください。VRChat側で「Allow Untrusted URLs」が必要になる場合があります。動画の権利と各サービスの利用規約を守って使用してください。
     </aside>
   </main>
 
   <script>
     const ownResolverBaseUrl = 'https://video.piloton.cc/resolve';
+    const infoEndpoint = 'https://video.piloton.cc/youtube/info';
     const redirectorBaseUrl = 'https://r.0cm.org/?url=';
     const ksyncBaseUrl = 'https://ksync.arcanescripts.com/custom/redir-url?videoUrl=';
     const youtubeInput = document.getElementById('youtube-url');
-    const vrchatOutput = document.getElementById('vrchat-url');
-    const ksyncOutput = document.getElementById('ksync-url');
     const createButton = document.getElementById('create-button');
     const clearButton = document.getElementById('clear-button');
-    const copyButton = document.getElementById('copy-button');
-    const ksyncCopyButton = document.getElementById('ksync-copy-button');
     const inputMessage = document.getElementById('input-message');
-    const copyMessage = document.getElementById('copy-message');
-    const ksyncCopyMessage = document.getElementById('ksync-copy-message');
-    const defaultInputMessage = 'youtube.com または youtu.be の公開動画URLを入力してください。';
-    const defaultKsyncMessage = 'メインリンクで再生できない時だけお使いください。';
+    const results = document.getElementById('results');
+    const resultKind = document.getElementById('result-kind');
+    const resultTitle = document.getElementById('result-title');
+    const resultMessage = document.getElementById('result-message');
+    const resultList = document.getElementById('result-list');
+    const copyAllMainButton = document.getElementById('copy-all-main');
+    const copyAllKsyncButton = document.getElementById('copy-all-ksync');
+    const defaultInputMessage = 'YouTubeの公開動画URLまたはプレイリストURLを入力してください。';
+    const allowedYouTubeHosts = new Set([
+      'youtube.com',
+      'www.youtube.com',
+      'm.youtube.com',
+      'music.youtube.com',
+      'youtu.be'
+    ]);
+    let resultEntries = [];
 
-    const isYouTubeUrl = (value) => {
+    const parseYouTubeUrl = (value) => {
       try {
         const url = new URL(value);
-        const host = url.hostname.toLowerCase().replace(/^www\./, '');
-        return url.protocol === 'https:' && (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com'));
+        const host = url.hostname.toLowerCase();
+        if (url.protocol !== 'https:' || !allowedYouTubeHosts.has(host) || url.port) return null;
+
+        const pathParts = url.pathname.split('/').filter(Boolean);
+        let videoId = null;
+        const playlistId = url.searchParams.get('list');
+        if (host === 'youtu.be') {
+          if (pathParts.length !== 1) return null;
+          videoId = pathParts[0];
+        } else if (url.pathname === '/watch') {
+          videoId = url.searchParams.get('v');
+        } else if (url.pathname === '/playlist') {
+          videoId = null;
+        } else if (pathParts.length === 2 && ['shorts', 'live', 'embed'].includes(pathParts[0])) {
+          videoId = pathParts[1];
+        } else {
+          return null;
+        }
+
+        if (videoId && !/^[a-z0-9_-]{11}$/i.test(videoId)) return null;
+        if (playlistId && !/^[a-z0-9_-]{10,128}$/i.test(playlistId)) return null;
+        if (!videoId && !playlistId) return null;
+
+        const rawIndex = url.searchParams.get('index');
+        const index = rawIndex === null ? null : Number.parseInt(rawIndex, 10);
+        if (rawIndex !== null && (!/^\d+$/.test(rawIndex) || index < 1 || index > 100000)) return null;
+        return { videoId, playlistId, index };
       } catch {
-        return false;
+        return null;
       }
     };
 
-    const createVrchatUrl = () => {
+    const buildConvertedLinks = (videoId) => {
+      const sourceUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      const mainUrl = `${ownResolverBaseUrl}?url=${encodeURIComponent(sourceUrl)}`;
+      const ksyncResolverUrl = `${ksyncBaseUrl}${encodeURIComponent(sourceUrl)}`;
+      const ksyncUrl = `${redirectorBaseUrl}${encodeURIComponent(ksyncResolverUrl)}`;
+      return { sourceUrl, mainUrl, ksyncUrl };
+    };
+
+    const setBusy = (busy) => {
+      youtubeInput.disabled = busy;
+      createButton.disabled = busy;
+      createButton.textContent = busy ? '取得中…' : '一覧を変換';
+      clearButton.disabled = busy || youtubeInput.value.length === 0;
+    };
+
+    const clearResults = () => {
+      resultEntries = [];
+      resultList.textContent = '';
+      resultTitle.textContent = '';
+      resultMessage.textContent = '';
+      resultMessage.className = 'message';
+      results.hidden = true;
+    };
+
+    const copyText = async (text, messageElement, successMessage) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        messageElement.textContent = successMessage;
+        messageElement.className = 'message success card-message';
+      } catch {
+        messageElement.textContent = '自動コピーできませんでした。表示されたURLを選択してコピーしてください。';
+        messageElement.className = 'message error card-message';
+      }
+    };
+
+    const createLinkBlock = (labelText, value, buttonText, action, index) => {
+      const block = document.createElement('div');
+      block.className = 'link-block';
+      const label = document.createElement('label');
+      const inputId = `${action}-url-${index}`;
+      label.htmlFor = inputId;
+      label.textContent = labelText;
+      const row = document.createElement('div');
+      row.className = 'link-row';
+      const input = document.createElement('input');
+      input.id = inputId;
+      input.type = 'text';
+      input.readOnly = true;
+      input.value = value;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = action === 'copy-ksync' ? 'compact secondary' : 'compact';
+      button.dataset.action = action;
+      button.dataset.index = String(index);
+      button.textContent = buttonText;
+      row.append(input, button);
+      block.append(label, row);
+      return block;
+    };
+
+    const createResultCard = (entry, index) => {
+      const card = document.createElement('article');
+      card.className = entry.selected ? 'result-card selected' : 'result-card';
+
+      const heading = document.createElement('div');
+      heading.className = 'video-heading';
+      const positionBadge = document.createElement('span');
+      positionBadge.className = 'position-badge';
+      positionBadge.textContent = entry.selected ? `優先 #${entry.position}` : `#${entry.position}`;
+      const titleWrap = document.createElement('div');
+      const title = document.createElement('h3');
+      title.className = 'video-title';
+      title.textContent = entry.title;
+      titleWrap.append(title);
+      if (entry.selected) {
+        const selectedNote = document.createElement('p');
+        selectedNote.className = 'selected-note';
+        selectedNote.textContent = `URLで指定された動画（元の${entry.position}番目）を先頭に表示しています。`;
+        titleWrap.append(selectedNote);
+      }
+      heading.append(positionBadge, titleWrap);
+
+      const mainBlock = createLinkBlock('メイン：Piloton専用リンク', entry.mainUrl, 'コピー', 'copy-main', index);
+      const ksyncBlock = createLinkBlock('予備：Ksyncリンク', entry.ksyncUrl, '予備をコピー', 'copy-ksync', index);
+      const message = document.createElement('p');
+      message.id = `card-message-${index}`;
+      message.className = 'message card-message';
+      message.setAttribute('role', 'status');
+      message.setAttribute('aria-live', 'polite');
+      card.append(heading, mainBlock, ksyncBlock, message);
+      return card;
+    };
+
+    const renderResults = (data) => {
+      if (!data || !Array.isArray(data.entries) || data.entries.length === 0) {
+        throw new Error('invalid-response');
+      }
+
+      const normalizedEntries = data.entries.map((entry, originalOrder) => {
+        if (!entry || typeof entry.id !== 'string' || !/^[a-z0-9_-]{11}$/i.test(entry.id)) return null;
+        const links = buildConvertedLinks(entry.id);
+        return {
+          ...links,
+          id: entry.id,
+          title: typeof entry.title === 'string' && entry.title.trim() ? entry.title.trim() : 'タイトルを取得できません',
+          position: Number.isInteger(entry.position) && entry.position > 0 ? entry.position : originalOrder + 1,
+          selected: entry.selected === true,
+          originalOrder
+        };
+      }).filter(Boolean);
+      if (normalizedEntries.length === 0) throw new Error('invalid-response');
+      normalizedEntries.sort((left, right) => Number(right.selected) - Number(left.selected) || left.originalOrder - right.originalOrder);
+      resultEntries = normalizedEntries;
+
+      resultKind.textContent = data.kind === 'playlist' ? 'PLAYLIST' : 'VIDEO';
+      resultTitle.textContent = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : 'YouTube 動画';
+      resultList.textContent = '';
+      resultEntries.forEach((entry, index) => resultList.append(createResultCard(entry, index)));
+
+      const selected = resultEntries.find((entry) => entry.selected);
+      const limitNotice = data.truncated ? ' 最大件数を超えたため、先頭から200件まで表示しています。' : '';
+      if (data.kind === 'playlist') {
+        const priorityNotice = selected
+          ? ` 元の${selected.position}番目の動画を優先して先頭へ移動しました。`
+          : '';
+        resultMessage.textContent = `${resultEntries.length}件をタイトル付きで変換しました。${priorityNotice}${limitNotice}`;
+      } else {
+        resultMessage.textContent = '動画タイトルと2種類の変換リンクを作成しました。';
+      }
+      resultMessage.className = 'message success';
+      results.hidden = false;
+    };
+
+    const friendlyError = (status) => {
+      if (status === 404) return '動画またはプレイリストが見つかりません。公開状態を確認してください。';
+      if (status === 429) return '短時間の利用回数が多いため、少し待ってからお試しください。';
+      if (status === 400 || status === 422) return 'YouTubeの動画またはプレイリストURLを確認してください。';
+      return 'タイトルやプレイリストを取得できません。少し待ってからもう一度お試しください。';
+    };
+
+    const createListing = async () => {
       const value = youtubeInput.value.trim();
-      copyMessage.textContent = '';
-      ksyncCopyMessage.textContent = defaultKsyncMessage;
-      ksyncCopyMessage.className = 'message';
-      if (!isYouTubeUrl(value)) {
-        inputMessage.textContent = 'HTTPSのYouTube URLを入力してください。';
+      const parsed = parseYouTubeUrl(value);
+      clearResults();
+      if (!parsed) {
+        inputMessage.textContent = 'HTTPSのYouTube動画またはプレイリストURLを入力してください。';
         inputMessage.className = 'message error';
-        vrchatOutput.value = '';
-        ksyncOutput.value = '';
-        copyButton.disabled = true;
-        ksyncCopyButton.disabled = true;
         return;
       }
 
-      vrchatOutput.value = `${ownResolverBaseUrl}?url=${encodeURIComponent(value)}`;
-      const ksyncResolverUrl = `${ksyncBaseUrl}${encodeURIComponent(value)}`;
-      ksyncOutput.value = `${redirectorBaseUrl}${encodeURIComponent(ksyncResolverUrl)}`;
-      copyButton.disabled = false;
-      ksyncCopyButton.disabled = false;
-      inputMessage.textContent = 'メインとKsync予備の2種類を作成しました。';
-      inputMessage.className = 'message success';
+      setBusy(true);
+      inputMessage.textContent = parsed.playlistId ? 'プレイリストと動画タイトルを取得しています…' : '動画タイトルを取得しています…';
+      inputMessage.className = 'message';
+      try {
+        const response = await fetch(`${infoEndpoint}?url=${encodeURIComponent(value)}`, {
+          method: 'GET',
+          mode: 'cors',
+          cache: 'no-store',
+          headers: { Accept: 'application/json' }
+        });
+        if (!response.ok) {
+          const error = new Error('request-failed');
+          error.status = response.status;
+          throw error;
+        }
+        renderResults(await response.json());
+        inputMessage.textContent = parsed.playlistId ? 'プレイリストの変換が完了しました。' : '動画の変換が完了しました。';
+        inputMessage.className = 'message success';
+      } catch (error) {
+        if (!parsed.playlistId && parsed.videoId) {
+          renderResults({
+            kind: 'video',
+            title: 'タイトルを取得できません',
+            truncated: false,
+            entries: [{ id: parsed.videoId, title: 'タイトルを取得できません', position: 1, selected: true }]
+          });
+          inputMessage.textContent = 'タイトルは取得できませんでしたが、変換リンクを作成しました。';
+          inputMessage.className = 'message error';
+        } else {
+          inputMessage.textContent = friendlyError(error.status);
+          inputMessage.className = 'message error';
+        }
+      } finally {
+        setBusy(false);
+      }
     };
 
     const clearTool = () => {
       youtubeInput.value = '';
-      vrchatOutput.value = '';
-      ksyncOutput.value = '';
-      copyButton.disabled = true;
-      ksyncCopyButton.disabled = true;
+      clearResults();
       clearButton.disabled = true;
       inputMessage.textContent = defaultInputMessage;
       inputMessage.className = 'message';
-      copyMessage.textContent = '';
-      copyMessage.className = 'message';
-      ksyncCopyMessage.textContent = defaultKsyncMessage;
-      ksyncCopyMessage.className = 'message';
       youtubeInput.focus();
     };
 
-    createButton.addEventListener('click', createVrchatUrl);
+    resultList.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const index = Number.parseInt(button.dataset.index, 10);
+      const entry = resultEntries[index];
+      const message = document.getElementById(`card-message-${index}`);
+      if (!entry || !message) return;
+      const isBackup = button.dataset.action === 'copy-ksync';
+      copyText(
+        isBackup ? entry.ksyncUrl : entry.mainUrl,
+        message,
+        isBackup ? 'Ksync予備リンクをコピーしました。' : 'メインリンクをコピーしました。'
+      );
+    });
+
+    const copyAll = (key, label) => {
+      if (resultEntries.length === 0) return;
+      const text = resultEntries.map((entry) => `${entry.title}\n${entry[key]}`).join('\n\n');
+      copyText(text, resultMessage, `${label}を${resultEntries.length}件まとめてコピーしました。`);
+    };
+
+    createButton.addEventListener('click', createListing);
     clearButton.addEventListener('click', clearTool);
+    copyAllMainButton.addEventListener('click', () => copyAll('mainUrl', 'メインリンク'));
+    copyAllKsyncButton.addEventListener('click', () => copyAll('ksyncUrl', 'Ksync予備リンク'));
     youtubeInput.addEventListener('input', () => {
       clearButton.disabled = youtubeInput.value.length === 0;
     });
     youtubeInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') createVrchatUrl();
+      if (event.key === 'Enter') createListing();
     });
-
-    const copyUrl = async (output, message) => {
-      if (!output.value) return;
-      try {
-        await navigator.clipboard.writeText(output.value);
-        message.textContent = 'コピーしました。VRChatの動画プレイヤーへ貼り付けてください。';
-        message.className = 'message success';
-      } catch {
-        output.select();
-        message.textContent = '自動コピーできなかったため、選択したURLを手動でコピーしてください。';
-        message.className = 'message error';
-      }
-    };
-
-    copyButton.addEventListener('click', () => copyUrl(vrchatOutput, copyMessage));
-    ksyncCopyButton.addEventListener('click', () => copyUrl(ksyncOutput, ksyncCopyMessage));
 
     window.addEventListener('load', () => {
       fetch('https://video.piloton.cc/health', { mode: 'no-cors', cache: 'no-store' }).catch(() => {});

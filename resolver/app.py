@@ -7,7 +7,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -33,6 +33,9 @@ app.add_middleware(
 
 ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
 ALLOWED_MEDIA_SUFFIXES = (".googlevideo.com",)
+YOUTUBE_VIDEO_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}")
+YOUTUBE_PLAYLIST_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{10,128}")
+YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed?{}"
 ALLOWED_REDGIFS_HOSTS = {"redgifs.com", "www.redgifs.com"}
 REDGIFS_MEDIA_HOST = "media.redgifs.com"
 REDGIFS_ID_PATTERN = re.compile(r"[A-Za-z0-9]+")
@@ -51,6 +54,8 @@ FORMAT_SELECTOR = os.getenv(
 )
 PLAYER_CLIENT = os.getenv("PLAYER_CLIENT", "android_vr")
 CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
+METADATA_CACHE_SECONDS = max(0, int(os.getenv("METADATA_CACHE_SECONDS", "300")))
+PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))))
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "12")))
 RATE_WINDOW_SECONDS = max(1, int(os.getenv("RATE_WINDOW_SECONDS", "60")))
 MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
@@ -59,8 +64,10 @@ REDIRECTOR_BASE_URL = "https://r.0cm.org/?url="
 KSYNC_BASE_URL = "https://ksync.arcanescripts.com/custom/redir-url?videoUrl="
 
 _cache: dict[str, tuple[float, str]] = {}
+_metadata_cache: dict[str, tuple[float, dict]] = {}
 _requests: dict[str, deque[float]] = defaultdict(deque)
 _extract_slots = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTS)
+_metadata_slots = asyncio.Semaphore(2)
 _redgifs_slots = asyncio.Semaphore(4)
 _redgifs_token: tuple[float, str] | None = None
 _redgifs_token_lock = threading.Lock()
@@ -99,6 +106,64 @@ def _validate_youtube_url(value: str) -> str:
         raise HTTPException(status_code=400, detail="A YouTube video URL is required")
 
     return value
+
+
+def _parse_youtube_info_url(value: str) -> tuple[str | None, str | None, int | None]:
+    if len(value) > 2048:
+        raise HTTPException(status_code=400, detail="URL is too long")
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid URL") from error
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or host not in ALLOWED_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+    ):
+        raise HTTPException(status_code=400, detail="Only HTTPS YouTube URLs are allowed")
+
+    query = parse_qs(parsed.query)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    video_id = None
+    playlist_id = (query.get("list") or [None])[0]
+
+    if host == "youtu.be":
+        if len(path_parts) != 1:
+            raise HTTPException(status_code=400, detail="A YouTube video URL is required")
+        video_id = path_parts[0]
+    elif parsed.path == "/watch":
+        video_id = (query.get("v") or [None])[0]
+    elif parsed.path == "/playlist":
+        pass
+    elif len(path_parts) == 2 and path_parts[0] in {"shorts", "live", "embed"}:
+        video_id = path_parts[1]
+    else:
+        raise HTTPException(status_code=400, detail="A YouTube video or playlist URL is required")
+
+    if video_id is not None and not YOUTUBE_VIDEO_ID_PATTERN.fullmatch(video_id):
+        raise HTTPException(status_code=400, detail="Invalid YouTube video ID")
+    if playlist_id is not None and not YOUTUBE_PLAYLIST_ID_PATTERN.fullmatch(playlist_id):
+        raise HTTPException(status_code=400, detail="Invalid YouTube playlist ID")
+    if video_id is None and playlist_id is None:
+        raise HTTPException(status_code=400, detail="Video or playlist ID is missing")
+
+    index = None
+    index_value = (query.get("index") or [None])[0]
+    if index_value is not None:
+        try:
+            index = int(index_value)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Invalid playlist index") from error
+        if index < 1 or index > 100000:
+            raise HTTPException(status_code=400, detail="Invalid playlist index")
+
+    return video_id, playlist_id, index
 
 
 def _validate_redgifs_url(value: str) -> str:
@@ -172,6 +237,165 @@ def _extract_media_url(video_url: str) -> str:
         raise ValueError("Unexpected media host")
 
     return direct_url
+
+
+def _get_cached_metadata(key: str) -> dict | None:
+    cached = _metadata_cache.get(key)
+    if cached and cached[0] > time.monotonic():
+        return cached[1]
+    return None
+
+
+def _cache_metadata(key: str, value: dict) -> dict:
+    _metadata_cache[key] = (time.monotonic() + METADATA_CACHE_SECONDS, value)
+    return value
+
+
+def _canonical_youtube_url(video_id: str) -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def _extract_single_video_metadata(video_id: str) -> dict:
+    cache_key = f"video:{video_id}"
+    cached = _get_cached_metadata(cache_key)
+    if cached:
+        return cached
+
+    canonical_url = _canonical_youtube_url(video_id)
+    endpoint = YOUTUBE_OEMBED_URL.format(
+        urlencode({"url": canonical_url, "format": "json"})
+    )
+    request = UrlRequest(
+        endpoint,
+        headers={"Accept": "application/json", "User-Agent": "PilotonVideoResolver/1.0"},
+        method="GET",
+    )
+    with urlopen(request, timeout=15) as response:
+        payload = json.load(response)
+    title = payload.get("title") if isinstance(payload, dict) else None
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("YouTube title is missing")
+
+    return _cache_metadata(
+        cache_key,
+        {"id": video_id, "title": title.strip(), "position": 1, "url": canonical_url},
+    )
+
+
+def _extract_playlist_metadata(playlist_id: str) -> dict:
+    cache_key = f"playlist:{playlist_id}"
+    cached = _get_cached_metadata(cache_key)
+    if cached:
+        return cached
+
+    playlist_url = f"https://www.youtube.com/playlist?{urlencode({'list': playlist_id})}"
+    options = {
+        "extract_flat": True,
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "cachedir": False,
+        "socket_timeout": 20,
+        "retries": 1,
+        "extractor_retries": 1,
+        "playlistend": PLAYLIST_MAX_ITEMS,
+    }
+    with YoutubeDL(options) as downloader:
+        info = downloader.extract_info(playlist_url, download=False)
+    if not isinstance(info, dict):
+        raise ValueError("YouTube playlist data is missing")
+
+    entries = []
+    for fallback_position, entry in enumerate(info.get("entries") or [], start=1):
+        if not isinstance(entry, dict):
+            continue
+        video_id = entry.get("id")
+        if not isinstance(video_id, str) or not YOUTUBE_VIDEO_ID_PATTERN.fullmatch(video_id):
+            continue
+        title = entry.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = "タイトルを取得できません"
+        position = entry.get("playlist_index")
+        if not isinstance(position, int) or position < 1:
+            position = fallback_position
+        entries.append(
+            {
+                "id": video_id,
+                "title": title.strip(),
+                "position": position,
+                "url": _canonical_youtube_url(video_id),
+            }
+        )
+    if not entries:
+        raise ValueError("YouTube playlist has no public videos")
+
+    playlist_title = info.get("title")
+    if not isinstance(playlist_title, str) or not playlist_title.strip():
+        playlist_title = "YouTube プレイリスト"
+    reported_total = info.get("playlist_count")
+    if not isinstance(reported_total, int) or reported_total < len(entries):
+        reported_total = len(entries)
+
+    return _cache_metadata(
+        cache_key,
+        {
+            "title": playlist_title.strip(),
+            "entries": entries,
+            "total": reported_total,
+            "truncated": reported_total > len(entries),
+        },
+    )
+
+
+def _build_youtube_listing(value: str) -> dict:
+    video_id, playlist_id, requested_index = _parse_youtube_info_url(value)
+    if not playlist_id:
+        entry = dict(_extract_single_video_metadata(video_id))
+        entry["selected"] = True
+        return {
+            "kind": "video",
+            "title": entry["title"],
+            "selected_video_id": video_id,
+            "total": 1,
+            "truncated": False,
+            "entries": [entry],
+        }
+
+    playlist = _extract_playlist_metadata(playlist_id)
+    entries = [dict(entry, selected=False) for entry in playlist["entries"]]
+    selected_offset = next(
+        (offset for offset, entry in enumerate(entries) if entry["id"] == video_id),
+        None,
+    )
+    if selected_offset is None and requested_index is not None:
+        selected_offset = next(
+            (offset for offset, entry in enumerate(entries) if entry["position"] == requested_index),
+            None,
+        )
+
+    selected_video_id = None
+    if selected_offset is not None:
+        selected_entry = entries.pop(selected_offset)
+        selected_entry["selected"] = True
+        selected_video_id = selected_entry["id"]
+        entries.insert(0, selected_entry)
+    elif video_id:
+        selected_entry = dict(_extract_single_video_metadata(video_id), selected=True)
+        if requested_index is not None:
+            selected_entry["position"] = requested_index
+        if len(entries) >= PLAYLIST_MAX_ITEMS:
+            entries.pop()
+        entries.insert(0, selected_entry)
+        selected_video_id = video_id
+
+    return {
+        "kind": "playlist",
+        "title": playlist["title"],
+        "selected_video_id": selected_video_id,
+        "total": playlist["total"],
+        "truncated": playlist["truncated"],
+        "entries": entries,
+    }
 
 
 def _build_ksync_fallback_url(video_url: str) -> str:
@@ -282,6 +506,33 @@ async def resolve_video(
 
     _cache[video_url] = (now + CACHE_SECONDS, direct_url)
     return RedirectResponse(direct_url, status_code=307, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/youtube/info")
+async def youtube_info(
+    request: Request,
+    url: str = Query(min_length=1, max_length=2048),
+) -> JSONResponse:
+    _parse_youtube_info_url(url)
+    client = request.client.host if request.client else "unknown"
+    _check_rate_limit(client)
+
+    try:
+        async with _metadata_slots:
+            listing = await asyncio.to_thread(_build_youtube_listing, url)
+    except HTTPError as error:
+        if error.code == 404:
+            raise HTTPException(status_code=404, detail="YouTube video or playlist was not found") from error
+        print(f"YouTube metadata API returned HTTP {error.code}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="YouTube could not provide title information") from error
+    except DownloadError as error:
+        print(f"YouTube playlist extraction failed: {error}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not read the YouTube playlist") from error
+    except (URLError, TimeoutError, json.JSONDecodeError, ValueError, OSError) as error:
+        print(f"YouTube metadata lookup failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not read YouTube title information") from error
+
+    return JSONResponse(listing, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/redgifs/resolve")

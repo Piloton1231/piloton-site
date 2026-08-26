@@ -12,12 +12,14 @@
 
 - `GET /health` — 稼働確認
 - `GET /resolve?url=<YouTube URL>` — YouTube URLを検証して一時的な `googlevideo.com` URLへ転送
+- `GET /youtube/info?url=<YouTube URL>` — 動画タイトルまたはプレイリスト一覧を取得し、URLで指定された再生位置を先頭にしてJSONで返却
 - `GET /redgifs/resolve?url=<RedGifs URL>` — 公開RedGifs URLを検証してHD優先のMP4 URLをJSONで返却
 - YouTubeのHTTPS動画URLだけを許可
 - RedGifsは公式サイトのHTTPS視聴・埋め込みURLだけを許可し、公式APIへ問い合わせ
 - シェルを使わずyt-dlpを実行
 - VRChatと相性のよい映像・音声一体型MP4を優先
 - YouTube側に自前抽出を拒否された場合はKsync予備経路へ自動切替
+- プレイリストは最大200件（`PLAYLIST_MAX_ITEMS` で変更可能）
 - 簡易キャッシュ、同時実行数制限、アクセス回数制限付き
 - 通常のアクセスログは無効
 
