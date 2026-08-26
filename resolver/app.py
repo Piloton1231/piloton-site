@@ -67,7 +67,7 @@ PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "12")))
 RATE_WINDOW_SECONDS = max(1, int(os.getenv("RATE_WINDOW_SECONDS", "60")))
 MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
-KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "1").lower() in {"1", "true", "yes"}
+KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "0").lower() in {"1", "true", "yes"}
 REDIRECTOR_BASE_URL = "https://r.0cm.org/?url="
 KSYNC_BASE_URL = "https://ksync.arcanescripts.com/custom/redir-url?videoUrl="
 
