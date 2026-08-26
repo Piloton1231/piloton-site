@@ -70,6 +70,7 @@ POT_SERVER_URL = os.getenv("POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/"
 FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}
 YOUTUBE_PROXY_URL = os.getenv("YOUTUBE_PROXY_URL", "").strip()
 CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
+EDGE_CACHE_SECONDS = max(0, int(os.getenv("EDGE_CACHE_SECONDS", str(CACHE_SECONDS))))
 METADATA_CACHE_SECONDS = max(0, int(os.getenv("METADATA_CACHE_SECONDS", "300")))
 PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))))
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "12")))
@@ -87,6 +88,18 @@ _metadata_slots = asyncio.Semaphore(2)
 _redgifs_slots = asyncio.Semaphore(4)
 _redgifs_token: tuple[float, str] | None = None
 _redgifs_token_lock = threading.Lock()
+
+
+def _direct_redirect_headers() -> dict[str, str]:
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Resolver-Path": "direct-googlevideo",
+    }
+    if EDGE_CACHE_SECONDS:
+        headers["Vercel-CDN-Cache-Control"] = (
+            f"public, s-maxage={EDGE_CACHE_SECONDS}, stale-while-revalidate=60"
+        )
+    return headers
 
 
 def _validate_youtube_url(value: str) -> str:
@@ -510,11 +523,12 @@ def _resolve_redgifs_media(media_id: str) -> tuple[str, str, str]:
 
 
 @app.get("/health")
-async def health() -> dict[str, str | bool]:
+async def health() -> dict[str, str | bool | int]:
     return {
         "status": "ok",
         "proxyEnabled": bool(YOUTUBE_PROXY_URL),
         "jsRuntimeBundled": BUNDLED_JS_RUNTIME_PATH.is_file(),
+        "edgeCacheSeconds": EDGE_CACHE_SECONDS,
     }
 
 
@@ -533,7 +547,7 @@ async def resolve_video(
         return RedirectResponse(
             cached[1],
             status_code=307,
-            headers={"Cache-Control": "no-store", "X-Resolver-Path": "direct-googlevideo"},
+            headers=_direct_redirect_headers(),
         )
 
     try:
@@ -556,7 +570,7 @@ async def resolve_video(
     return RedirectResponse(
         direct_url,
         status_code=307,
-        headers={"Cache-Control": "no-store", "X-Resolver-Path": "direct-googlevideo"},
+        headers=_direct_redirect_headers(),
     )
 
 

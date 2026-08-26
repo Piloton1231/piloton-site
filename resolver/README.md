@@ -16,6 +16,8 @@ Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` �
 
 VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` ラッパーでYouTubeの署名処理を実行します。`/health` の `jsRuntimeBundled` が `true` なら署名処理を利用できます。
 
+直接転送に成功した応答は、既定で180秒間Vercel CDNへ保存します。`vrchat-youtube.html` は変換直後に優先動画をバックグラウンド準備するため、その後VRChatから同じリンクを開く際の初回待ち時間を短縮できます。時間は `EDGE_CACHE_SECONDS` で変更できます。
+
 デプロイ完了後、VercelのProject Settings → Domainsへ `video.piloton.cc` を追加します。表示されたCNAMEの宛先をPorkbun DNSへ登録し、`https://video.piloton.cc/health` が `{"status":"ok"}` を返せば完了です。
 
 ## 構成
