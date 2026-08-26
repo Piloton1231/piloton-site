@@ -519,18 +519,12 @@
       const existing = resolverWarmups.get(entry.mainUrl);
       if (existing) return existing;
 
-      const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 60000);
       const warmup = fetch(entry.mainUrl, {
         method: 'GET',
-        mode: 'no-cors',
+        mode: 'cors',
         cache: 'default',
-        redirect: 'follow',
-        signal: controller.signal
-      }).then(() => true).catch(() => false).finally(() => {
-        window.clearTimeout(timeout);
-        controller.abort();
-      });
+        redirect: 'manual'
+      }).then(() => true).catch(() => false);
       resolverWarmups.set(entry.mainUrl, warmup);
       return warmup;
     };
