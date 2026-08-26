@@ -20,5 +20,13 @@ services:
         value: "60"
       - key: MAX_CONCURRENT_EXTRACTS
         value: "2"
-      - key: PLAYER_CLIENT
-        value: android_vr
+      - key: PLAYER_CLIENTS
+        value: mweb,android_vr
+      - key: JS_RUNTIME
+        value: node
+      - key: POT_PROVIDER
+        value: "1"
+      - key: FORCE_IPV4
+        value: "1"
+      - key: KSYNC_FALLBACK
+        value: "0"
