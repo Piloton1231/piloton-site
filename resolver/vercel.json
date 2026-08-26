@@ -1,15 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["sin1"],
-  "functions": {
-    "api/resolve.js": {
-      "maxDuration": 300
-    }
-  },
-  "rewrites": [
-    {
-      "source": "/resolve",
-      "destination": "/api/resolve"
-    }
-  ]
+  "regions": ["sin1"]
 }

@@ -1,22 +1,21 @@
-FROM brainicism/bgutil-ytdlp-pot-provider:1.3.2-node
+FROM denoland/deno:bin-2.9.5 AS deno
 
-USER root
+FROM python:3.13-slim
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH=/opt/resolver-venv/bin:$PATH
+    DENO_DIR=/home/resolver/.cache/deno
 
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates python3 python3-venv \
-    && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --uid 10001 resolver
+WORKDIR /app
 
-WORKDIR /srv/resolver
+COPY --from=deno /deno /usr/local/bin/deno
+
 COPY requirements.txt ./
-RUN python3 -m venv /opt/resolver-venv \
-    && pip install --no-cache-dir --requirement requirements.txt
+RUN pip install --no-cache-dir --requirement requirements.txt
 
 COPY app.py ./
-USER node
+USER resolver
 
 EXPOSE 8000
-ENTRYPOINT []
-CMD ["sh", "-c", "node /app/build/main.js & exec uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log --proxy-headers --forwarded-allow-ips '*' "]
+CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log --proxy-headers --forwarded-allow-ips '*' "]
