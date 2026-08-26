@@ -60,13 +60,11 @@ PLAYER_CLIENTS = tuple(
     ).split(",")
     if client.strip()
 ) or ("web_embedded", "android_vr")
-JS_RUNTIME = os.getenv("JS_RUNTIME", "node").strip()
-BUNDLED_NODE_PATH = Path(__file__).resolve().with_name(
-    "node-runtime.exe" if os.name == "nt" else "node-runtime"
-)
+JS_RUNTIME = os.getenv("JS_RUNTIME", "quickjs").strip()
+BUNDLED_JS_RUNTIME_PATH = Path(__file__).resolve().with_name("qjs")
 JS_RUNTIME_PATH = os.getenv("JS_RUNTIME_PATH", "").strip()
-if not JS_RUNTIME_PATH and JS_RUNTIME == "node" and BUNDLED_NODE_PATH.is_file():
-    JS_RUNTIME_PATH = str(BUNDLED_NODE_PATH)
+if not JS_RUNTIME_PATH and JS_RUNTIME == "quickjs" and BUNDLED_JS_RUNTIME_PATH.is_file():
+    JS_RUNTIME_PATH = str(BUNDLED_JS_RUNTIME_PATH)
 POT_PROVIDER = os.getenv("POT_PROVIDER", "0").lower() in {"1", "true", "yes"}
 POT_SERVER_URL = os.getenv("POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/")
 FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}
@@ -516,7 +514,7 @@ async def health() -> dict[str, str | bool]:
     return {
         "status": "ok",
         "proxyEnabled": bool(YOUTUBE_PROXY_URL),
-        "jsRuntimeBundled": BUNDLED_NODE_PATH.is_file(),
+        "jsRuntimeBundled": BUNDLED_JS_RUNTIME_PATH.is_file(),
     }
 
 
