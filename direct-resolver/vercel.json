@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["sin1"],
+  "regions": ["iad1"],
   "functions": {
     "api/resolve.mjs": {
       "maxDuration": 60
