@@ -1,6 +1,6 @@
-# Piloton VRChat YouTube Resolver
+# Piloton Video URL Resolver
 
-`vrchat-youtube.html` が作成するURLを受け取り、公開YouTube動画の互換ストリームへHTTP 307で転送する小さなバックエンドです。動画本体は中継しません。
+`vrchat-youtube.html` の公開YouTube動画URL転送と、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当する小さなバックエンドです。動画本体は中継しません。
 
 ## Vercelで無料運用
 
@@ -12,7 +12,9 @@
 
 - `GET /health` — 稼働確認
 - `GET /resolve?url=<YouTube URL>` — YouTube URLを検証して一時的な `googlevideo.com` URLへ転送
+- `GET /redgifs/resolve?url=<RedGifs URL>` — 公開RedGifs URLを検証してHD優先のMP4 URLをJSONで返却
 - YouTubeのHTTPS動画URLだけを許可
+- RedGifsは公式サイトのHTTPS視聴・埋め込みURLだけを許可し、公式APIへ問い合わせ
 - シェルを使わずyt-dlpを実行
 - VRChatと相性のよい映像・音声一体型MP4を優先
 - YouTube側に自前抽出を拒否された場合はKsync予備経路へ自動切替
