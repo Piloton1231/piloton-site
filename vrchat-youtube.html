@@ -521,7 +521,7 @@
 
       const warmup = fetch(entry.mainUrl, {
         method: 'GET',
-        mode: 'no-cors',
+        mode: 'cors',
         cache: 'default',
         redirect: 'manual'
       }).then(() => true).catch(() => false);
