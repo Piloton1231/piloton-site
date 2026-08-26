@@ -1,267 +1,367 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>放置ボタン</title>
-    <style>
-        :root {
-            --bg-color-light: rgba(255, 255, 255, 0.8);
-            --text-color-light: #000000;
-            --bg-color-dark: rgba(18, 18, 18, 0.8);
-            --text-color-dark: #ffffff;
-            --button-bg-light: rgba(249, 249, 249, 0.8);
-            --button-bg-dark: rgba(51, 51, 51, 0.8);
-            --button-border-light: #ccc;
-            --button-border-dark: #555;
-            --primary-color: linear-gradient(45deg, #ff416c, #ff4b2b); /* グラデーション */
-            --primary-hover-color: linear-gradient(45deg, #ff4b2b, #ff416c); /* ホバー時のグラデーション */
-        }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>放置ボタン</title>
+  <link rel="stylesheet" href="gate-theme.css">
+  <style>
+    body.idle-page {
+      height: 100vh;
+      overflow: hidden;
+    }
 
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
-            color: var(--text-color-dark);
-            transition: color 0.3s;
-        }
+    .background {
+      position: fixed;
+      z-index: -2;
+      inset: 0;
+      overflow: hidden;
+      background: var(--bg);
+    }
 
-        .background {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
-            overflow: hidden;
-        }
+    .background video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: saturate(0.8) contrast(1.05) brightness(0.7);
+    }
 
-        .background video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
+    .container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background:
+        radial-gradient(circle at 14% 16%, rgba(61, 247, 255, 0.2), transparent 32rem),
+        radial-gradient(circle at 86% 12%, rgba(255, 62, 219, 0.18), transparent 30rem),
+        rgba(2, 4, 13, 0.7);
+    }
 
-        .container {
-            display: flex;
-            align-items: center;
-            width: 100%;
-            height: 100%;
-            position: relative;
-            background-color: var(--bg-color-dark);
-            transition: background-color 0.3s;
-        }
+    .idle-shell {
+      height: 100dvh;
+      min-height: 0;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
 
-        .buttons {
-            position: fixed;
-            left: -300px;
-            top: 50%;
-            transform: translateY(-50%);
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            transition: left 0.3s ease;
-            z-index: 10;
-        }
+    .topbar-start {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
 
-        .buttons.visible {
-            left: 10px;
-        }
+    .toggle-button {
+      flex: 0 0 auto;
+      width: 44px;
+      min-height: 44px;
+      padding: 0;
+      font-size: 20px;
+      transition: transform 0.25s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+    }
 
-        .button {
-            font-size: 24px;
-            padding: 10px 20px;
-            cursor: pointer;
-            border: 2px solid var(--button-border-dark);
-            border-radius: 5px;
-            background-color: var(--button-bg-dark);
-            color: var(--text-color-dark);
-            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
-        }
+    .toggle-button[aria-expanded="true"] {
+      transform: rotate(180deg);
+      border-color: rgba(124, 255, 196, 0.62);
+      box-shadow: 0 0 22px rgba(124, 255, 196, 0.18);
+    }
 
-        .button:hover {
-            background-color: #444444;
-        }
+    .toggle-button[aria-expanded="true"]:hover,
+    .toggle-button[aria-expanded="true"]:focus-visible {
+      transform: rotate(180deg) translateY(3px);
+    }
 
-        .toggle-button {
-            position: fixed;
-            left: 10px;
-            top: 10px;
-            font-size: 18px;
-            padding: 10px 20px;
-            cursor: pointer;
-            border: 2px solid var(--button-border-dark);
-            border-radius: 5px;
-            background-color: var(--button-bg-dark);
-            color: var(--text-color-dark);
-            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
-            z-index: 11;
-        }
+    .buttons {
+      position: fixed;
+      z-index: 20;
+      top: 96px;
+      left: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: min(300px, calc(100vw - 28px));
+      max-height: calc(100dvh - 116px);
+      padding: 14px;
+      overflow-y: auto;
+      border-radius: 24px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(calc(-100% - 28px));
+      transition: transform 0.3s ease, opacity 0.3s ease;
+    }
 
-        .toggle-button:hover {
-            background-color: #444444;
-        }
+    .buttons.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(0);
+    }
 
-        /* Return to HOME ボタンのスタイル */
-        .return-button {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            font-size: 18px;
-            padding: 10px 20px;
-            cursor: pointer;
-            border: none;
-            border-radius: 30px;
-            background: var(--primary-color); /* グラデーション背景 */
-            color: white;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-            transition: transform 0.3s, box-shadow 0.3s, background 0.3s;
-            z-index: 11;
-        }
+    .button {
+      justify-content: flex-start;
+      width: 100%;
+      min-height: 50px;
+      border-radius: 16px;
+      font-size: 15px;
+      text-align: left;
+    }
 
-        .return-button:hover {
-            background: var(--primary-hover-color); /* ホバー時のグラデーション */
-            transform: scale(1.1); /* 拡大効果 */
-            box-shadow: 0 6px 15px rgba(255, 75, 43, 0.5); /* 光沢のある影 */
-        }
+    .display-panel {
+      display: grid;
+      place-items: center;
+      min-height: 0;
+      padding: clamp(20px, 5vw, 58px);
+      border-radius: 38px;
+    }
 
-        .return-button:active {
-            transform: scale(0.95); /* 押したときの縮小効果 */
-        }
+    .display-panel::before {
+      content: "";
+      position: absolute;
+      width: min(58vw, 560px);
+      aspect-ratio: 1;
+      border: 1px solid rgba(61, 247, 255, 0.24);
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(61, 247, 255, 0.12), rgba(141, 92, 255, 0.08) 44%, transparent 70%);
+      box-shadow: 0 0 60px rgba(61, 247, 255, 0.16) inset;
+      animation: idlePulse 4.4s ease-in-out infinite;
+      pointer-events: none;
+    }
 
-        .display {
-            flex-grow: 1;
-            font-size: 48px;
-            font-weight: bold;
-            text-align: center;
-            transition: transform 0.3s;
-            z-index: 1;
-        }
+    @keyframes idlePulse {
+      50% { transform: scale(1.04); filter: saturate(1.3); }
+    }
 
-        .slider-container {
-            position: absolute;
-            bottom: 20px;
-            width: 100%;
-            text-align: center;
-        }
+    .display {
+      position: relative;
+      z-index: 1;
+      max-width: 100%;
+      color: var(--ink);
+      font-size: clamp(36px, 7vw, 88px);
+      font-weight: 900;
+      line-height: 1.18;
+      text-align: center;
+      text-shadow: 0 0 30px rgba(61, 247, 255, 0.28);
+      transition: transform 0.3s ease;
+      transform-origin: center;
+    }
 
-        .slider {
-            width: 300px;
-        }
+    .control-deck {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      padding: 14px;
+      border-radius: 28px;
+    }
 
-        .volume-container {
-            position: absolute;
-            bottom: 60px;
-            width: 100%;
-            text-align: center;
-        }
+    .slider-container,
+    .volume-container {
+      display: grid;
+      grid-template-columns: auto minmax(120px, 1fr);
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+      padding: 14px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.07);
+    }
 
-        .piloton {
-            position: fixed;
-            bottom: 10px;
-            right: 10px;
-            font-size: 14px;
-            font-weight: bold;
-            color: #ffffff;
-            text-shadow: 0 0 5px #00ffcc, 0 0 10px #00ffcc, 0 0 20px #00ffcc;
-            animation: glow 1.5s infinite alternate;
-            z-index: 15;
-        }
+    .slider-container label,
+    .volume-container label {
+      color: var(--soft);
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
 
-        @keyframes glow {
-            from {
-                text-shadow: 0 0 5px #00ffcc, 0 0 10px #00ffcc, 0 0 20px #00ffcc;
-            }
-            to {
-                text-shadow: 0 0 10px #00ffcc, 0 0 20px #00ffcc, 0 0 40px #00ffcc;
-            }
-        }
-    </style>
+    .slider {
+      width: 100%;
+      accent-color: var(--cyan);
+      cursor: pointer;
+    }
+
+    .slider:focus-visible {
+      outline: 2px solid rgba(61, 247, 255, 0.7);
+      outline-offset: 5px;
+    }
+
+    .piloton {
+      position: fixed;
+      z-index: 15;
+      right: 18px;
+      bottom: 10px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+      text-shadow: 0 0 12px var(--green), 0 0 28px var(--green);
+      text-transform: uppercase;
+    }
+
+    @media (min-width: 1208px) {
+      .buttons {
+        left: calc((100vw - 1180px) / 2);
+      }
+    }
+
+    @media (max-width: 720px) {
+      .idle-shell {
+        padding-bottom: 10px;
+      }
+
+      .display-panel {
+        border-radius: 28px;
+      }
+
+      .control-deck {
+        grid-template-columns: 1fr;
+        gap: 8px;
+        padding: 8px;
+        border-radius: 22px;
+      }
+
+      .slider-container,
+      .volume-container {
+        min-height: 48px;
+        padding: 9px 12px;
+        border-radius: 16px;
+      }
+
+      .piloton {
+        display: none;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .topbar-start {
+        gap: 6px;
+      }
+
+      .gate-brand-mark,
+      .brand-name {
+        display: none;
+      }
+
+      .buttons {
+        top: 76px;
+        max-height: calc(100dvh - 88px);
+      }
+
+      .display-panel::before {
+        width: 78vw;
+      }
+
+      .display {
+        font-size: clamp(30px, 10vw, 54px);
+      }
+
+      .slider-container,
+      .volume-container {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+    }
+  </style>
 </head>
-<body>
-    <div class="background">
-        <!-- Replace the video source with your desired file -->
-        <video autoplay loop id="background-video">
-            <source src="https://files.catbox.moe/bb8wzj.mp4" type="video/mp4">
-        </video>
-    </div>
-    <div class="container">
-        <button class="toggle-button" onclick="toggleButtons()">＞</button>
-        <button class="return-button" onclick="location.href='index.html'">Return to HOME</button>
-        <div class="buttons" id="buttons">
-            <button class="button" onclick="updateDisplay('🚗', 'お出かけ中')">🚗 車でお出かけ</button>
-            <button class="button" onclick="updateDisplay('🚴', 'お出かけ中')">🚴 自転車でお出かけ</button>
-            <button class="button" onclick="updateDisplay('🚶', 'お出かけ中')">🚶 歩いてお出かけ</button>
-            <button class="button" onclick="updateDisplay('🛁', 'お風呂に入っています')">🛁 お風呂</button>
-            <button class="button" onclick="updateDisplay('🚿', 'シャワー中')">🚿 シャワー中</button>
-            <button class="button" onclick="updateDisplay('🎮', 'ゲーム中')">🎮 ゲーム中</button>
-            <button class="button" onclick="updateDisplay('💺', '離席中')">💺 離席中</button>
-            <button class="button" onclick="updateDisplay('📞', '電話中')">📞 電話中</button>
+<body class="gate-page idle-page">
+  <div class="background">
+    <video autoplay loop id="background-video">
+      <source src="https://files.catbox.moe/bb8wzj.mp4" type="video/mp4">
+    </video>
+  </div>
+
+  <div class="container">
+    <main class="gate-shell idle-shell">
+      <header class="gate-topbar" aria-label="サイトヘッダー">
+        <div class="topbar-start">
+          <button
+            class="museum-button toggle-button"
+            type="button"
+            aria-label="状態メニューを開く"
+            aria-controls="buttons"
+            aria-expanded="false"
+            onclick="toggleButtons(this)"
+          >＞</button>
+          <div class="gate-brand">
+            <span class="gate-brand-mark" aria-hidden="true"></span>
+            <span class="brand-name">Pii-chan Future Museum</span>
+          </div>
         </div>
-        <div class="display" id="display">
-            選択してください
-        </div>
+        <span class="gate-label">GATE 02</span>
+        <a class="home-link return-button" href="index.html">Return to HOME</a>
+      </header>
+
+      <aside class="buttons glass-card" id="buttons" aria-label="表示する状態">
+        <button class="museum-button button" type="button" onclick="updateDisplay('🚗', 'お出かけ中')">🚗 車でお出かけ</button>
+        <button class="museum-button button" type="button" onclick="updateDisplay('🚴', 'お出かけ中')">🚴 自転車でお出かけ</button>
+        <button class="museum-button button" type="button" onclick="updateDisplay('🚶', 'お出かけ中')">🚶 歩いてお出かけ</button>
+        <button class="museum-button button" type="button" onclick="updateDisplay('🛁', 'お風呂に入っています')">🛁 お風呂</button>
+        <button class="museum-button button" type="button" onclick="updateDisplay('🚿', 'シャワー中')">🚿 シャワー中</button>
+        <button class="museum-button button" type="button" onclick="updateDisplay('🎮', 'ゲーム中')">🎮 ゲーム中</button>
+        <button class="museum-button button" type="button" onclick="updateDisplay('💺', '離席中')">💺 離席中</button>
+        <button class="museum-button button" type="button" onclick="updateDisplay('📞', '電話中')">📞 電話中</button>
+      </aside>
+
+      <section class="gate-stage display-panel" aria-live="polite">
+        <div class="display" id="display">選択してください</div>
+      </section>
+
+      <section class="control-deck glass-card" aria-label="表示と音量の設定">
         <div class="slider-container">
-            <label for="zoom-slider">拡大率: <span id="zoom-value">100</span>%</label>
-            <input
-                type="range"
-                id="zoom-slider"
-                class="slider"
-                min="10"
-                max="200"
-                value="100"
-                oninput="updateZoom(this.value)"
-            />
+          <label for="zoom-slider">拡大率: <span id="zoom-value">100</span>%</label>
+          <input
+            type="range"
+            id="zoom-slider"
+            class="slider"
+            min="10"
+            max="200"
+            value="100"
+            oninput="updateZoom(this.value)"
+          >
         </div>
         <div class="volume-container">
-            <label for="volume-slider">音量: <span id="volume-value">5</span>%</label>
-            <input
-                type="range"
-                id="volume-slider"
-                class="slider"
-                min="0"
-                max="100"
-                value="5"
-                oninput="updateVolume(this.value)"
-            />
+          <label for="volume-slider">音量: <span id="volume-value">5</span>%</label>
+          <input
+            type="range"
+            id="volume-slider"
+            class="slider"
+            min="0"
+            max="100"
+            value="5"
+            oninput="updateVolume(this.value)"
+          >
         </div>
-        <div class="piloton">Piloton</div>
-    </div>
+      </section>
+    </main>
 
-    <script>
-        let isDarkTheme = true;
+    <div class="piloton">Piloton</div>
+  </div>
 
-        // Set initial volume for the background video
-        const backgroundVideo = document.getElementById('background-video');
-        backgroundVideo.volume = 0.05; // Default volume is 5%
+  <script>
+    const backgroundVideo = document.getElementById('background-video');
+    backgroundVideo.volume = 0.05;
 
-        function updateDisplay(emoji, text) {
-            const display = document.getElementById('display');
-            display.innerHTML = `${emoji} ${text}`;
-        }
+    function updateDisplay(emoji, text) {
+      const display = document.getElementById('display');
+      display.textContent = `${emoji} ${text}`;
+    }
 
-        function updateZoom(value) {
-            const display = document.getElementById('display');
-            const zoomValue = document.getElementById('zoom-value');
-            zoomValue.textContent = value;
-            display.style.transform = `scale(${value / 100})`;
-        }
+    function updateZoom(value) {
+      const display = document.getElementById('display');
+      const zoomValue = document.getElementById('zoom-value');
+      zoomValue.textContent = value;
+      display.style.transform = `scale(${value / 100})`;
+    }
 
-        function updateVolume(value) {
-            const volumeValue = document.getElementById('volume-value');
-            volumeValue.textContent = value;
-            backgroundVideo.volume = value / 100; // Update video volume
-        }
+    function updateVolume(value) {
+      const volumeValue = document.getElementById('volume-value');
+      volumeValue.textContent = value;
+      backgroundVideo.volume = value / 100;
+    }
 
-        function toggleButtons() {
-            const buttons = document.getElementById('buttons');
-            buttons.classList.toggle('visible');
-        }
-    </script>
+    function toggleButtons(toggleButton) {
+      const buttons = document.getElementById('buttons');
+      const isVisible = buttons.classList.toggle('visible');
+      toggleButton.setAttribute('aria-expanded', String(isVisible));
+      toggleButton.setAttribute('aria-label', isVisible ? '状態メニューを閉じる' : '状態メニューを開く');
+    }
+  </script>
 </body>
 </html>
