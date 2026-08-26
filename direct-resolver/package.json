@@ -13,6 +13,7 @@
     "bgutils-js": "4.0.3",
     "canvas": "3.2.3",
     "jsdom": "26.1.0",
+    "undici": "8.10.0",
     "youtubei.js": "18.0.0"
   }
 }

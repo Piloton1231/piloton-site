@@ -10,3 +10,5 @@ Docker対応サービスではRoot Directoryを `direct-resolver`、Dockerfile�
 - `GET /resolve?url=<HTTPS YouTube URL>`
 
 `/resolve` が返す `Location` は `.googlevideo.com` に限定しています。非公開、ログイン必須、年齢制限付き、有料動画は対象外です。
+
+YouTubeへの通信を固定ISPプロキシ経由にする場合は、VercelのEnvironment Variablesへ `YOUTUBE_PROXY_URL` を追加します。値は `http://USER:PASS@HOST:PORT` 形式で登録し、GitHubには保存しません。`/health` の `proxyEnabled` が `true` なら設定済みです。

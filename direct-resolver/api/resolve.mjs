@@ -7,9 +7,24 @@ import {
 } from "bgutils-js/utils";
 import { WebPoMinter } from "bgutils-js/webpo";
 import { JSDOM } from "jsdom";
+import { ProxyAgent, setGlobalDispatcher } from "undici";
 import { Innertube, Platform } from "youtubei.js";
 
 Platform.shim.eval = async (data) => new Function(data.output)();
+
+const proxyUrl = (process.env.YOUTUBE_PROXY_URL || "").trim();
+if (proxyUrl) {
+  let parsedProxy;
+  try {
+    parsedProxy = new URL(proxyUrl);
+  } catch {
+    throw new Error("YOUTUBE_PROXY_URL is not a valid URL");
+  }
+  if (!["http:", "https:", "socks5:"].includes(parsedProxy.protocol)) {
+    throw new Error("YOUTUBE_PROXY_URL must use HTTP, HTTPS, or SOCKS5");
+  }
+  setGlobalDispatcher(new ProxyAgent(parsedProxy));
+}
 
 const REQUEST_KEY = "O43z0dpjhgX20SCx4KAo";
 const YOUTUBE_HOSTS = new Set([

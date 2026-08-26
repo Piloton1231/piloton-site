@@ -26,7 +26,11 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (requestUrl.pathname === "/health") {
-    sendJson(response, 200, { status: "ok", resolver: "youtubejs-pot" });
+    sendJson(response, 200, {
+      status: "ok",
+      resolver: "youtubejs-pot",
+      proxyEnabled: Boolean((process.env.YOUTUBE_PROXY_URL || "").trim()),
+    });
     return;
   }
 
