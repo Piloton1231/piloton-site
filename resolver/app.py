@@ -55,11 +55,11 @@ FORMAT_SELECTOR = os.getenv(
 PLAYER_CLIENTS = tuple(
     client.strip()
     for client in os.getenv(
-        "PLAYER_CLIENTS", os.getenv("PLAYER_CLIENT", "android_vr")
+        "PLAYER_CLIENTS", os.getenv("PLAYER_CLIENT", "web_embedded,android_vr")
     ).split(",")
     if client.strip()
-) or ("android_vr",)
-JS_RUNTIME = os.getenv("JS_RUNTIME", "").strip()
+) or ("web_embedded", "android_vr")
+JS_RUNTIME = os.getenv("JS_RUNTIME", "node").strip()
 POT_PROVIDER = os.getenv("POT_PROVIDER", "0").lower() in {"1", "true", "yes"}
 POT_SERVER_URL = os.getenv("POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/")
 FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}

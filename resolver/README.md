@@ -25,7 +25,7 @@ Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` �
 - YouTubeのHTTPS動画URLだけを許可
 - RedGifsは公式サイトのHTTPS視聴・埋め込みURLだけを許可し、公式APIへ問い合わせ
 - シェルを使わずyt-dlpを実行
-- VRChatと相性のよい映像・音声一体型MP4を優先
+- VRChatと相性のよい `WEB_EMBEDDED_PLAYER` の映像・音声一体型MP4を優先し、失敗時は別クライアントへ切替
 - Vercel版でYouTube側に自前抽出を拒否された場合はKsync予備経路へ自動切替
 - プレイリストは最大200件（`PLAYLIST_MAX_ITEMS` で変更可能）
 - 簡易キャッシュ、同時実行数制限、アクセス回数制限付き

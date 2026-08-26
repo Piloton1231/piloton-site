@@ -3,7 +3,7 @@ FROM brainicism/bgutil-ytdlp-pot-provider:1.3.2-node
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/venv/bin:$PATH \
-    PLAYER_CLIENTS=mweb,android_vr \
+    PLAYER_CLIENTS=web_embedded,mweb,android_vr \
     JS_RUNTIME=node \
     POT_PROVIDER=1 \
     POT_SERVER_URL=http://127.0.0.1:4416 \
