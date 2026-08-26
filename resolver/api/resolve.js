@@ -17,6 +17,7 @@ const ALLOWED_HOSTS = new Set([
   "youtu.be",
 ]);
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+const PLAYER_CLIENTS = ["MWEB", "ANDROID_VR", "ANDROID", "TV", "WEB_EMBEDDED", "WEB"];
 const DIRECT_CACHE_SECONDS = 180;
 const RATE_LIMIT = 12;
 const RATE_WINDOW_MS = 60_000;
@@ -204,24 +205,41 @@ export async function resolveDirectUrl(value) {
 
   const state = await getResolverState();
   const poToken = await state.minter.mintAsWebsafeString(videoId);
-  const videoInfo = await state.innertube.getBasicInfo(videoId, {
-    client: "MWEB",
-    po_token: poToken,
-  });
-  const format = videoInfo.chooseFormat({ itag: 18 });
-  const deciphered = await format.decipher(state.innertube.session.player);
-  const mediaUrl = new URL(deciphered);
-  const mediaHost = mediaUrl.hostname.toLowerCase().replace(/\.$/, "");
-  if (mediaUrl.protocol !== "https:" || !mediaHost.endsWith(".googlevideo.com")) {
-    throw new Error("Unexpected media host");
+  let lastError;
+  for (const playerClient of PLAYER_CLIENTS) {
+    try {
+      const videoInfo = await state.innertube.getBasicInfo(videoId, {
+        client: playerClient,
+        po_token: poToken,
+      });
+      if (!videoInfo.streaming_data) {
+        console.warn(
+          `YouTube ${playerClient} returned no streaming data`,
+          JSON.stringify(videoInfo.playability_status || {}),
+        );
+        continue;
+      }
+
+      const format = videoInfo.chooseFormat({ itag: 18 });
+      const deciphered = await format.decipher(state.innertube.session.player);
+      const mediaUrl = new URL(deciphered);
+      const mediaHost = mediaUrl.hostname.toLowerCase().replace(/\.$/, "");
+      if (mediaUrl.protocol !== "https:" || !mediaHost.endsWith(".googlevideo.com")) {
+        throw new Error("Unexpected media host");
+      }
+      mediaUrl.searchParams.set("pot", poToken);
+      const directUrl = mediaUrl.toString();
+      directCache.set(videoId, {
+        expiresAt: Date.now() + DIRECT_CACHE_SECONDS * 1000,
+        url: directUrl,
+      });
+      return { cached: false, url: directUrl };
+    } catch (error) {
+      lastError = error;
+      console.warn(`YouTube ${playerClient} strategy failed`, error);
+    }
   }
-  mediaUrl.searchParams.set("pot", poToken);
-  const directUrl = mediaUrl.toString();
-  directCache.set(videoId, {
-    expiresAt: Date.now() + DIRECT_CACHE_SECONDS * 1000,
-    url: directUrl,
-  });
-  return { cached: false, url: directUrl };
+  throw new Error("No compatible Google Video URL was returned", { cause: lastError });
 }
 
 export default async function handler(request, response) {
