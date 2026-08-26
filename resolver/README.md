@@ -12,6 +12,8 @@ Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` �
 
 個人利用はVercelのHobbyプランを利用できます。VercelへGitHubでログインして `Piloton1231/piloton-site` をImportし、Root Directoryを `resolver` にしてデプロイします。FastAPIは自動検出され、`vercel.json` によりシンガポールで実行されます。
 
+固定ISPプロキシを使う場合は、VercelのEnvironment Variablesへ `YOUTUBE_PROXY_URL` を `http://USER:PASS@HOST:PORT` 形式で登録します。この値はGitHubへ保存しません。`/health` の `proxyEnabled` が `true` なら設定済みです。
+
 デプロイ完了後、VercelのProject Settings → Domainsへ `video.piloton.cc` を追加します。表示されたCNAMEの宛先をPorkbun DNSへ登録し、`https://video.piloton.cc/health` が `{"status":"ok"}` を返せば完了です。
 
 ## 構成

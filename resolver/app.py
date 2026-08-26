@@ -63,6 +63,7 @@ JS_RUNTIME = os.getenv("JS_RUNTIME", "").strip()
 POT_PROVIDER = os.getenv("POT_PROVIDER", "0").lower() in {"1", "true", "yes"}
 POT_SERVER_URL = os.getenv("POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/")
 FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}
+YOUTUBE_PROXY_URL = os.getenv("YOUTUBE_PROXY_URL", "").strip()
 CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
 METADATA_CACHE_SECONDS = max(0, int(os.getenv("METADATA_CACHE_SECONDS", "300")))
 PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))))
@@ -238,6 +239,8 @@ def _extract_media_url(video_url: str) -> str:
             options["js_runtimes"] = {JS_RUNTIME: {}}
         if FORCE_IPV4:
             options["source_address"] = "0.0.0.0"
+        if YOUTUBE_PROXY_URL:
+            options["proxy"] = YOUTUBE_PROXY_URL
 
         try:
             with YoutubeDL(options) as downloader:
@@ -329,6 +332,8 @@ def _extract_playlist_metadata(playlist_id: str) -> dict:
         "extractor_retries": 1,
         "playlistend": PLAYLIST_MAX_ITEMS,
     }
+    if YOUTUBE_PROXY_URL:
+        options["proxy"] = YOUTUBE_PROXY_URL
     with YoutubeDL(options) as downloader:
         info = downloader.extract_info(playlist_url, download=False)
     if not isinstance(info, dict):
@@ -499,8 +504,8 @@ def _resolve_redgifs_media(media_id: str) -> tuple[str, str, str]:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, str | bool]:
+    return {"status": "ok", "proxyEnabled": bool(YOUTUBE_PROXY_URL)}
 
 
 @app.get("/resolve")
