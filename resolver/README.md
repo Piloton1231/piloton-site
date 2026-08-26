@@ -2,6 +2,12 @@
 
 `vrchat-youtube.html` の公開YouTube動画URL転送と、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当する小さなバックエンドです。動画本体は中継しません。
 
+## DockHostingで無料運用
+
+GitHubリポジトリ `Piloton1231/piloton-site` を選択し、Runtimeを `Dockerfile`、Root Directoryを `resolver`、App Portを `8000` にします。データベースは不要です。
+
+Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` から映像・音声一体型MP4の一時的な `googlevideo.com` URLへ直接転送します。`PORT` はDockHostingから自動設定されます。
+
 ## Vercelで無料運用
 
 個人利用はVercelのHobbyプランを利用できます。VercelへGitHubでログインして `Piloton1231/piloton-site` をImportし、Root Directoryを `resolver` にしてデプロイします。FastAPIは自動検出され、`vercel.json` によりシンガポールで実行されます。
@@ -18,7 +24,7 @@
 - RedGifsは公式サイトのHTTPS視聴・埋め込みURLだけを許可し、公式APIへ問い合わせ
 - シェルを使わずyt-dlpを実行
 - VRChatと相性のよい映像・音声一体型MP4を優先
-- YouTube側に自前抽出を拒否された場合はKsync予備経路へ自動切替
+- Vercel版でYouTube側に自前抽出を拒否された場合はKsync予備経路へ自動切替
 - プレイリストは最大200件（`PLAYLIST_MAX_ITEMS` で変更可能）
 - 簡易キャッシュ、同時実行数制限、アクセス回数制限付き
 - 通常のアクセスログは無効
