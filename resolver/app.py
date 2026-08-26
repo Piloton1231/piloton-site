@@ -7,7 +7,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -52,17 +52,17 @@ FORMAT_SELECTOR = os.getenv(
     "FORMAT_SELECTOR",
     "18/best[ext=mp4][vcodec!=none][acodec!=none][height<=?720]",
 )
-PLAYER_CLIENT = os.getenv("PLAYER_CLIENT", "android_vr")
+PLAYER_CLIENTS = tuple(
+    client.strip()
+    for client in os.getenv("PLAYER_CLIENTS", "android,android_vr,mweb,tv,web").split(",")
+    if client.strip()
+)
 CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
 METADATA_CACHE_SECONDS = max(0, int(os.getenv("METADATA_CACHE_SECONDS", "300")))
 PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))))
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "12")))
 RATE_WINDOW_SECONDS = max(1, int(os.getenv("RATE_WINDOW_SECONDS", "60")))
 MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
-KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "1").lower() in {"1", "true", "yes"}
-REDIRECTOR_BASE_URL = "https://r.0cm.org/?url="
-KSYNC_BASE_URL = "https://ksync.arcanescripts.com/custom/redir-url?videoUrl="
-
 _cache: dict[str, tuple[float, str]] = {}
 _metadata_cache: dict[str, tuple[float, dict]] = {}
 _requests: dict[str, deque[float]] = defaultdict(deque)
@@ -203,40 +203,69 @@ def _check_rate_limit(client: str) -> None:
     recent.append(now)
 
 
-def _extract_media_url(video_url: str) -> str:
-    options = {
-        "format": FORMAT_SELECTOR,
-        "noplaylist": True,
-        "skip_download": True,
-        "quiet": True,
-        "no_warnings": True,
-        "cachedir": False,
-        "socket_timeout": 20,
-        "retries": 1,
-        "extractor_retries": 1,
-        "extractor_args": {
-            "youtube": {"player_client": [PLAYER_CLIENT]},
-            "youtube-ejs": {"jitless": ["true"]},
-        },
-    }
-
-    with YoutubeDL(options) as downloader:
-        info = downloader.extract_info(video_url, download=False)
-
-    direct_url = info.get("url") if isinstance(info, dict) else None
-    if not direct_url and isinstance(info, dict):
-        downloads = info.get("requested_downloads") or []
-        if downloads:
-            direct_url = downloads[0].get("url")
-
-    if not direct_url:
-        raise ValueError("No compatible media URL was returned")
-
-    media_host = (urlsplit(direct_url).hostname or "").lower().rstrip(".")
-    if not any(media_host.endswith(suffix) for suffix in ALLOWED_MEDIA_SUFFIXES):
+def _validate_google_media_url(value: str) -> str:
+    parsed = urlsplit(value)
+    media_host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or not any(
+        media_host.endswith(suffix) for suffix in ALLOWED_MEDIA_SUFFIXES
+    ):
         raise ValueError("Unexpected media host")
+    return value
 
-    return direct_url
+
+def _probe_google_media_url(direct_url: str) -> str:
+    request = UrlRequest(
+        _validate_google_media_url(direct_url),
+        headers={"Range": "bytes=0-0", "User-Agent": "Mozilla/5.0"},
+        method="GET",
+    )
+    with urlopen(request, timeout=15) as response:
+        if response.status not in {200, 206}:
+            raise ValueError("Google Video did not accept the media URL")
+        response.read(1)
+        return _validate_google_media_url(response.geturl())
+
+
+def _extract_media_url(video_url: str) -> str:
+    last_error = None
+    for player_client in PLAYER_CLIENTS:
+        options = {
+            "format": FORMAT_SELECTOR,
+            "noplaylist": True,
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+            "cachedir": False,
+            "socket_timeout": 20,
+            "retries": 1,
+            "extractor_retries": 1,
+            "js_runtimes": {"node": {}},
+            "extractor_args": {"youtube": {"player_client": [player_client]}},
+        }
+
+        try:
+            with YoutubeDL(options) as downloader:
+                info = downloader.extract_info(video_url, download=False)
+
+            direct_url = info.get("url") if isinstance(info, dict) else None
+            if not direct_url and isinstance(info, dict):
+                downloads = info.get("requested_downloads") or []
+                if downloads:
+                    direct_url = downloads[0].get("url")
+            if not direct_url:
+                raise ValueError("No compatible media URL was returned")
+            return _probe_google_media_url(direct_url)
+        except (DownloadError, HTTPError, URLError, TimeoutError, ValueError, OSError) as error:
+            last_error = error
+            print(
+                f"YouTube direct strategy failed: {player_client} ({type(error).__name__})",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    if isinstance(last_error, DownloadError):
+        raise last_error
+    raise ValueError("No working Google Video URL was returned") from last_error
 
 
 def _get_cached_metadata(key: str) -> dict | None:
@@ -398,11 +427,6 @@ def _build_youtube_listing(value: str) -> dict:
     }
 
 
-def _build_ksync_fallback_url(video_url: str) -> str:
-    ksync_url = f"{KSYNC_BASE_URL}{quote(video_url, safe='')}"
-    return f"{REDIRECTOR_BASE_URL}{quote(ksync_url, safe='')}"
-
-
 def _read_redgifs_json(endpoint: str, token: str | None = None) -> dict:
     headers = REDGIFS_HEADERS.copy()
     if token:
@@ -486,26 +510,28 @@ async def resolve_video(
     now = time.monotonic()
     cached = _cache.get(video_url)
     if cached and cached[0] > now:
-        return RedirectResponse(cached[1], status_code=307, headers={"Cache-Control": "no-store"})
+        return RedirectResponse(
+            cached[1],
+            status_code=307,
+            headers={"Cache-Control": "no-store", "X-Resolver-Path": "direct-googlevideo-cache"},
+        )
 
     try:
         async with _extract_slots:
             direct_url = await asyncio.to_thread(_extract_media_url, video_url)
     except DownloadError as error:
         print(f"yt-dlp extraction failed: {error}", file=sys.stderr, flush=True)
-        if KSYNC_FALLBACK:
-            return RedirectResponse(
-                _build_ksync_fallback_url(video_url),
-                status_code=307,
-                headers={"Cache-Control": "no-store", "X-Resolver-Path": "ksync-fallback"},
-            )
         raise HTTPException(status_code=422, detail="YouTube could not provide a compatible stream") from error
     except (ValueError, OSError) as error:
         print(f"resolver extraction failed: {error}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not resolve the video") from error
 
     _cache[video_url] = (now + CACHE_SECONDS, direct_url)
-    return RedirectResponse(direct_url, status_code=307, headers={"Cache-Control": "no-store"})
+    return RedirectResponse(
+        direct_url,
+        status_code=307,
+        headers={"Cache-Control": "no-store", "X-Resolver-Path": "direct-googlevideo"},
+    )
 
 
 @app.get("/youtube/info")
