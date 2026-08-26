@@ -14,6 +14,8 @@ Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` �
 
 固定ISPプロキシを使う場合は、VercelのEnvironment Variablesへ `YOUTUBE_PROXY_URL` を `http://USER:PASS@HOST:PORT` 形式で登録します。この値はGitHubへ保存しません。`/health` の `proxyEnabled` が `true` なら設定済みです。
 
+VercelのPython関数にはNode.jsが標準同梱されないため、`package.json` のインストール処理でビルド環境のNode.js実行ファイルを関数へ含めます。`/health` の `jsRuntimeBundled` が `true` なら署名処理を利用できます。
+
 デプロイ完了後、VercelのProject Settings → Domainsへ `video.piloton.cc` を追加します。表示されたCNAMEの宛先をPorkbun DNSへ登録し、`https://video.piloton.cc/health` が `{"status":"ok"}` を返せば完了です。
 
 ## 構成

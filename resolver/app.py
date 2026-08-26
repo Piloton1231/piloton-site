@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
@@ -60,6 +61,12 @@ PLAYER_CLIENTS = tuple(
     if client.strip()
 ) or ("web_embedded", "android_vr")
 JS_RUNTIME = os.getenv("JS_RUNTIME", "node").strip()
+BUNDLED_NODE_PATH = Path(__file__).resolve().with_name(
+    "node-runtime.exe" if os.name == "nt" else "node-runtime"
+)
+JS_RUNTIME_PATH = os.getenv("JS_RUNTIME_PATH", "").strip()
+if not JS_RUNTIME_PATH and JS_RUNTIME == "node" and BUNDLED_NODE_PATH.is_file():
+    JS_RUNTIME_PATH = str(BUNDLED_NODE_PATH)
 POT_PROVIDER = os.getenv("POT_PROVIDER", "0").lower() in {"1", "true", "yes"}
 POT_SERVER_URL = os.getenv("POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/")
 FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}
@@ -236,7 +243,8 @@ def _extract_media_url(video_url: str) -> str:
             "extractor_args": extractor_args,
         }
         if JS_RUNTIME:
-            options["js_runtimes"] = {JS_RUNTIME: {}}
+            runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
+            options["js_runtimes"] = {JS_RUNTIME: runtime_options}
         if FORCE_IPV4:
             options["source_address"] = "0.0.0.0"
         if YOUTUBE_PROXY_URL:
@@ -505,7 +513,11 @@ def _resolve_redgifs_media(media_id: str) -> tuple[str, str, str]:
 
 @app.get("/health")
 async def health() -> dict[str, str | bool]:
-    return {"status": "ok", "proxyEnabled": bool(YOUTUBE_PROXY_URL)}
+    return {
+        "status": "ok",
+        "proxyEnabled": bool(YOUTUBE_PROXY_URL),
+        "jsRuntimeBundled": BUNDLED_NODE_PATH.is_file(),
+    }
 
 
 @app.get("/resolve")
