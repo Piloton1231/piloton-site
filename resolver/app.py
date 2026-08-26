@@ -13,7 +13,7 @@ from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
@@ -33,6 +33,7 @@ app.add_middleware(
 )
 
 ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
+SITE_ORIGINS = {"https://piloton.cc", "https://www.piloton.cc"}
 ALLOWED_MEDIA_SUFFIXES = (".googlevideo.com",)
 YOUTUBE_VIDEO_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}")
 YOUTUBE_PLAYLIST_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{10,128}")
@@ -100,6 +101,19 @@ def _direct_redirect_headers() -> dict[str, str]:
             f"public, s-maxage={EDGE_CACHE_SECONDS}, stale-while-revalidate=60"
         )
     return headers
+
+
+def _resolved_response(request: Request, direct_url: str) -> Response:
+    if request.headers.get("origin", "").lower() in SITE_ORIGINS:
+        return Response(
+            status_code=204,
+            headers={"Cache-Control": "no-store", "X-Resolver-Path": "prewarm-ready"},
+        )
+    return RedirectResponse(
+        direct_url,
+        status_code=307,
+        headers=_direct_redirect_headers(),
+    )
 
 
 def _validate_youtube_url(value: str) -> str:
@@ -536,7 +550,7 @@ async def health() -> dict[str, str | bool | int]:
 async def resolve_video(
     request: Request,
     url: str = Query(min_length=1, max_length=2048),
-) -> RedirectResponse:
+) -> Response:
     video_url = _validate_youtube_url(url)
     client = request.client.host if request.client else "unknown"
     _check_rate_limit(client)
@@ -544,11 +558,7 @@ async def resolve_video(
     now = time.monotonic()
     cached = _cache.get(video_url)
     if cached and cached[0] > now:
-        return RedirectResponse(
-            cached[1],
-            status_code=307,
-            headers=_direct_redirect_headers(),
-        )
+        return _resolved_response(request, cached[1])
 
     try:
         async with _extract_slots:
@@ -567,11 +577,7 @@ async def resolve_video(
         raise HTTPException(status_code=502, detail="Could not resolve the video") from error
 
     _cache[video_url] = (now + CACHE_SECONDS, direct_url)
-    return RedirectResponse(
-        direct_url,
-        status_code=307,
-        headers=_direct_redirect_headers(),
-    )
+    return _resolved_response(request, direct_url)
 
 
 @app.get("/youtube/info")
