@@ -223,35 +223,68 @@ async function getInnertube() {
 }
 
 async function extractDirectUrl(videoId) {
-  const minter = await getMinter();
-  const poToken = await minter.mintAsWebsafeString(videoId);
-  if (!poToken) throw new Error("PO token generation failed");
-
   const innertube = await getInnertube();
-  let format;
+  const strategies = [];
+
   try {
-    format = await innertube.getStreamingData(videoId, {
-      itag: 18,
-      client: "MWEB",
-      po_token: poToken,
-    });
-  } catch {
-    format = await innertube.getStreamingData(videoId, {
-      type: "video+audio",
-      quality: "best",
-      format: "mp4",
-      client: "MWEB",
-      po_token: poToken,
-    });
+    const minter = await getMinter();
+    const poToken = await minter.mintAsWebsafeString(videoId);
+    if (poToken) {
+      strategies.push({ client: "MWEB", po_token: poToken });
+    }
+  } catch (error) {
+    console.warn("MWEB PO token setup failed", error?.message || error);
   }
 
-  const directUrl = format?.url;
-  if (!directUrl) throw new Error("No compatible MP4 URL was returned");
-  const mediaUrl = new URL(directUrl);
-  if (!mediaUrl.hostname.toLowerCase().endsWith(".googlevideo.com")) {
-    throw new Error("Unexpected media host");
+  strategies.push(
+    { client: "ANDROID_VR" },
+    { client: "ANDROID" },
+    { client: "IOS" },
+    { client: "TV_EMBEDDED" },
+  );
+
+  const failures = [];
+  for (const strategy of strategies) {
+    let format;
+    try {
+      format = await innertube.getStreamingData(videoId, {
+        itag: 18,
+        ...strategy,
+      });
+    } catch (itagError) {
+      try {
+        format = await innertube.getStreamingData(videoId, {
+          type: "video+audio",
+          quality: "best",
+          format: "mp4",
+          ...strategy,
+        });
+      } catch (fallbackError) {
+        failures.push(
+          `${strategy.client}: ${fallbackError?.message || itagError?.message || "failed"}`,
+        );
+        continue;
+      }
+    }
+
+    const directUrl = format?.url;
+    if (!directUrl) {
+      failures.push(`${strategy.client}: no compatible MP4 URL`);
+      continue;
+    }
+    const mediaUrl = new URL(directUrl);
+    if (!mediaUrl.hostname.toLowerCase().endsWith(".googlevideo.com")) {
+      failures.push(`${strategy.client}: unexpected media host`);
+      continue;
+    }
+    return mediaUrl.href;
   }
-  return mediaUrl.href;
+
+  throw new Error(
+    failures.length
+      ? `All YouTube clients failed (${failures.join("; ")})`
+      : "No YouTube client strategy was available",
+  );
 }
 
 export async function GET(request) {
