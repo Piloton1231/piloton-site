@@ -308,7 +308,6 @@
         <p class="support-copy">すべて <code>video.piloton.cc</code> のリンクに変換します。ニコニコ動画はPiloton側でHLSを生成・中継し、その他は直接メディアURLまたはVRChat向けに整理したHLSを返します。</p>
         <div class="site-tags" aria-label="対応サービス一覧">
           <span class="site-tag">ニコニコ動画</span>
-          <span class="site-tag">bilibili</span>
           <span class="site-tag">X / Twitter</span>
           <span class="site-tag">TikTok</span>
           <span class="site-tag">mellow-fan / OPENREC</span>
@@ -349,7 +348,6 @@
 
     const identifyService = (host) => {
       const services = [
-        [['bilibili.com', 'bilibili.tv', 'b23.tv'], 'bilibili'],
         [['x.com', 'twitter.com'], 'X / Twitter'],
         [['tiktok.com'], 'TikTok'],
         [['mellow-fan.com', 'openrec.tv'], 'mellow-fan / OPENREC'],

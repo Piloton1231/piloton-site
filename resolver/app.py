@@ -78,7 +78,7 @@ CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
 EDGE_CACHE_SECONDS = max(0, int(os.getenv("EDGE_CACHE_SECONDS", str(CACHE_SECONDS))))
 METADATA_CACHE_SECONDS = max(0, int(os.getenv("METADATA_CACHE_SECONDS", "300")))
 PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))))
-RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "12")))
+RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "30")))
 RATE_WINDOW_SECONDS = max(1, int(os.getenv("RATE_WINDOW_SECONDS", "60")))
 MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
 KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "1").lower() in {"1", "true", "yes"}
@@ -100,9 +100,6 @@ NICONICO_FRONTEND_HEADERS = {
     "X-Frontend-Version": "0",
 }
 STREAM_SOURCE_HOST_ROOTS = (
-    "bilibili.com",
-    "bilibili.tv",
-    "b23.tv",
     "x.com",
     "twitter.com",
     "tiktok.com",
@@ -151,7 +148,8 @@ STREAM_MANIFEST_MAX_BYTES = max(
 STREAM_MEDIA_MAX_BYTES = max(
     1_000_000, min(32_000_000, int(os.getenv("STREAM_MEDIA_MAX_BYTES", "12000000")))
 )
-STREAM_PROXY_BASE_URL = "https://video.piloton.cc/stream/media?token="
+STREAM_PROXY_BASE_URL = "https://video.piloton.cc/stream/media"
+ABEMA_KEY_PROXY_BASE_URL = "https://video.piloton.cc/stream/key.bin?token="
 STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~-]{16,256}")
 
 _cache: dict[str, tuple[float, str]] = {}
@@ -518,6 +516,121 @@ def _stream_format_score(stream_format: dict) -> tuple[int, int, int, float]:
     )
 
 
+def _encode_abema_key_token(key: bytes) -> str:
+    if len(key) != 16:
+        raise ValueError("ABEMA returned an invalid video key")
+    payload = json.dumps(
+        [key.hex(), int(time.time()) + STREAM_TOKEN_SECONDS],
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_abema_key_token(token: str) -> bytes:
+    if len(token) > 256:
+        raise HTTPException(status_code=400, detail="Invalid video key token")
+    try:
+        padding = "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(token + padding))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=400, detail="Invalid video key token") from error
+    if not isinstance(payload, list) or len(payload) != 2:
+        raise HTTPException(status_code=400, detail="Invalid video key token")
+    key_hex, expires_at = payload
+    if (
+        not isinstance(key_hex, str)
+        or not re.fullmatch(r"[0-9a-f]{32}", key_hex)
+        or not isinstance(expires_at, int)
+        or expires_at < int(time.time())
+        or expires_at > int(time.time()) + 3600
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid video key token")
+    return bytes.fromhex(key_hex)
+
+
+def _read_abema_video_key(downloader: YoutubeDL, license_url: str) -> bytes:
+    parsed = urlsplit(license_url)
+    if (
+        parsed.scheme != "abematv-license"
+        or not parsed.hostname
+        or not re.fullmatch(r"[A-Za-z0-9_-]{16,256}", parsed.hostname)
+    ):
+        raise ValueError("ABEMA returned an invalid license URL")
+    with downloader.urlopen(license_url) as response:
+        key = response.read(17)
+    if len(key) != 16:
+        raise ValueError("ABEMA returned an invalid video key")
+    return key
+
+
+def _create_abema_manifest(downloader: YoutubeDL, info: dict) -> str:
+    formats = [stream_format for stream_format in info.get("formats", []) if isinstance(stream_format, dict)]
+    hls_formats = [
+        stream_format
+        for stream_format in formats
+        if isinstance(stream_format.get("url"), str)
+        and str(stream_format.get("protocol", "")).startswith("m3u8")
+    ]
+    preferred = [
+        stream_format
+        for stream_format in hls_formats
+        if isinstance(stream_format.get("height"), (int, float))
+        and 0 < stream_format["height"] <= 720
+    ]
+    if not preferred:
+        preferred = hls_formats
+    if not preferred:
+        raise StreamCompatibilityError("ABEMA did not provide an HLS stream")
+    selected = max(preferred, key=_stream_format_score)
+    manifest, final_url = _read_public_hls_manifest(selected["url"])
+
+    key_tokens = {}
+
+    def replace_key_uri(match: re.Match) -> str:
+        license_url = match.group(1)
+        if license_url not in key_tokens:
+            key = _read_abema_video_key(downloader, license_url)
+            key_tokens[license_url] = _encode_abema_key_token(key)
+        return f'URI="{ABEMA_KEY_PROXY_BASE_URL}{quote(key_tokens[license_url], safe="")}"'
+
+    rewritten = []
+    for line in manifest.splitlines():
+        if line.startswith("#"):
+            rewritten.append(
+                re.sub(r'URI="(abematv-license://[^"]+)"', replace_key_uri, line)
+            )
+        elif line.strip():
+            rewritten.append(_validate_direct_media_url(urljoin(final_url, line.strip())))
+        else:
+            rewritten.append(line)
+    return "\n".join(rewritten) + "\n"
+
+
+def _select_soundcloud_progressive(info: dict) -> str | None:
+    candidates = []
+    for stream_format in info.get("formats", []):
+        if not isinstance(stream_format, dict):
+            continue
+        format_url = stream_format.get("url")
+        if not isinstance(format_url, str) or urlsplit(format_url).scheme != "https":
+            continue
+        if stream_format.get("vcodec") != "none" or stream_format.get("ext") not in {"mp3", "m4a"}:
+            continue
+        if stream_format.get("protocol") not in {"http", "https"}:
+            continue
+        candidates.append(stream_format)
+    if not candidates:
+        return None
+    selected = max(
+        candidates,
+        key=lambda stream_format: (
+            int(stream_format.get("ext") == "mp3"),
+            float(stream_format.get("abr") or stream_format.get("tbr") or 0),
+        ),
+    )
+    return _validate_direct_media_url(selected["url"])
+
+
 def _extract_stream_media(value: str) -> tuple[str, str]:
     options = {
         "format": STREAM_FORMAT_SELECTOR,
@@ -536,12 +649,18 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
 
     with YoutubeDL(options) as downloader:
         info = downloader.extract_info(value, download=False)
+        if isinstance(info, dict) and info.get("extractor_key") == "AbemaTV":
+            return "abema-manifest", _create_abema_manifest(downloader, info)
 
     direct_url = info.get("url") if isinstance(info, dict) else None
-    if isinstance(direct_url, str):
-        return "redirect", _validate_direct_media_url(direct_url)
     if not isinstance(info, dict):
         raise ValueError("No stream information was returned")
+    if str(info.get("extractor_key", "")).lower() == "soundcloud":
+        progressive_url = _select_soundcloud_progressive(info)
+        if progressive_url:
+            return "redirect", progressive_url
+    if isinstance(direct_url, str):
+        return "redirect", _validate_direct_media_url(direct_url)
 
     formats = [stream_format for stream_format in info.get("formats", []) if isinstance(stream_format, dict)]
     progressive_formats = []
@@ -637,7 +756,10 @@ def _decode_stream_token(token: str) -> tuple[str, str]:
 
 def _proxy_stream_url(upstream_url: str, domand_cookie: str) -> str:
     token = _encode_stream_token(upstream_url, domand_cookie)
-    return f"{STREAM_PROXY_BASE_URL}{quote(token, safe='')}"
+    extension = Path(urlsplit(upstream_url).path).suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,8}", extension):
+        extension = ".bin"
+    return f"{STREAM_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
 
 
 def _rewrite_hls_manifest(manifest: str, base_url: str, domand_cookie: str) -> str:
@@ -796,6 +918,19 @@ def _check_rate_limit(client: str) -> None:
     if len(recent) >= RATE_LIMIT:
         raise HTTPException(status_code=429, detail="Too many requests")
     recent.append(now)
+
+
+def _request_client_key(request: Request) -> str:
+    for header_name in ("x-vercel-forwarded-for", "x-forwarded-for", "x-real-ip"):
+        raw_value = request.headers.get(header_name)
+        if not raw_value:
+            continue
+        candidate = raw_value.split(",", 1)[0].strip()
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            continue
+    return request.client.host if request.client else "unknown"
 
 
 def _extract_media_url(video_url: str) -> str:
@@ -1104,7 +1239,7 @@ async def resolve_stream(
     url: str = Query(min_length=1, max_length=2048),
 ) -> Response:
     route, video_id = _validate_stream_source_url(url)
-    client = request.client.host if request.client else "unknown"
+    client = _request_client_key(request)
     _check_rate_limit(client)
 
     if route == "direct":
@@ -1150,14 +1285,18 @@ async def resolve_stream(
         print(f"original stream resolver failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not create the original stream") from error
 
-    if stream_kind == "manifest":
+    if stream_kind in {"manifest", "abema-manifest"}:
         return Response(
             content=stream_content,
             media_type="application/vnd.apple.mpegurl",
             headers={
                 "Access-Control-Allow-Origin": "*",
                 "Cache-Control": "no-store",
-                "X-Resolver-Path": "original-simplified-hls",
+                "X-Resolver-Path": (
+                    "original-abema-hls"
+                    if stream_kind == "abema-manifest"
+                    else "original-simplified-hls"
+                ),
             },
         )
     return RedirectResponse(
@@ -1167,10 +1306,25 @@ async def resolve_stream(
     )
 
 
-@app.get("/stream/media")
-async def proxy_niconico_media(
+@app.get("/stream/key.bin")
+async def serve_abema_video_key(
+    token: str = Query(min_length=1, max_length=256),
+) -> Response:
+    key = _decode_abema_key_token(token)
+    return Response(
+        content=key,
+        media_type="application/octet-stream",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=300",
+            "X-Resolver-Path": "original-abema-key",
+        },
+    )
+
+
+async def _proxy_niconico_media_response(
     request: Request,
-    token: str = Query(min_length=1, max_length=12000),
+    token: str,
 ) -> Response:
     upstream_url, domand_cookie = _decode_stream_token(token)
     range_header = request.headers.get("range")
@@ -1208,13 +1362,32 @@ async def proxy_niconico_media(
     return Response(content=body, status_code=status_code, headers=response_headers)
 
 
+@app.get("/stream/media")
+async def proxy_niconico_media(
+    request: Request,
+    token: str = Query(min_length=1, max_length=12000),
+) -> Response:
+    return await _proxy_niconico_media_response(request, token)
+
+
+@app.get("/stream/media.{extension}")
+async def proxy_niconico_media_with_extension(
+    request: Request,
+    extension: str,
+    token: str = Query(min_length=1, max_length=12000),
+) -> Response:
+    if not re.fullmatch(r"[a-z0-9]{1,8}", extension):
+        raise HTTPException(status_code=404, detail="Unsupported stream extension")
+    return await _proxy_niconico_media_response(request, token)
+
+
 @app.get("/resolve")
 async def resolve_video(
     request: Request,
     url: str = Query(min_length=1, max_length=2048),
 ) -> Response:
     video_url = _validate_youtube_url(url)
-    client = request.client.host if request.client else "unknown"
+    client = _request_client_key(request)
     _check_rate_limit(client)
 
     now = time.monotonic()
@@ -1248,7 +1421,7 @@ async def youtube_info(
     url: str = Query(min_length=1, max_length=2048),
 ) -> JSONResponse:
     _parse_youtube_info_url(url)
-    client = request.client.host if request.client else "unknown"
+    client = _request_client_key(request)
     _check_rate_limit(client)
 
     try:
@@ -1275,7 +1448,7 @@ async def resolve_redgifs(
     url: str = Query(min_length=1, max_length=2048),
 ) -> JSONResponse:
     media_id = _validate_redgifs_url(url)
-    client = request.client.host if request.client else "unknown"
+    client = _request_client_key(request)
     _check_rate_limit(client)
 
     try:
