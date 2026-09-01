@@ -10,7 +10,7 @@ Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` �
 
 ## Vercelで無料運用
 
-個人利用はVercelのHobbyプランを利用できます。VercelへGitHubでログインして `Piloton1231/piloton-site` をImportし、Root Directoryを `resolver` にしてデプロイします。FastAPIは自動検出され、`vercel.json` によりシンガポールで実行されます。
+個人利用はVercelのHobbyプランを利用できます。VercelへGitHubでログインして `Piloton1231/piloton-site` をImportし、Root Directoryを `resolver` にしてデプロイします。FastAPIは自動検出され、日本限定配信を解析できるよう `vercel.json` により東京で実行されます。
 
 固定ISPプロキシを使う場合は、VercelのEnvironment Variablesへ `YOUTUBE_PROXY_URL` を `http://USER:PASS@HOST:PORT` 形式で登録します。この値はGitHubへ保存しません。`/health` の `proxyEnabled` が `true` なら設定済みです。
 
