@@ -68,7 +68,7 @@ if not JS_RUNTIME_PATH and JS_RUNTIME == "quickjs" and BUNDLED_JS_RUNTIME_PATH.i
     JS_RUNTIME_PATH = str(BUNDLED_JS_RUNTIME_PATH)
 POT_PROVIDER = os.getenv("POT_PROVIDER", "0").lower() in {"1", "true", "yes"}
 POT_SERVER_URL = os.getenv("POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/")
-FORCE_IPV4 = os.getenv("FORCE_IPV4", "1").lower() in {"1", "true", "yes"}
+FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}
 YOUTUBE_PROXY_URL = os.getenv("YOUTUBE_PROXY_URL", "").strip()
 CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
 EDGE_CACHE_SECONDS = max(0, int(os.getenv("EDGE_CACHE_SECONDS", str(CACHE_SECONDS))))
@@ -542,7 +542,6 @@ async def health() -> dict[str, str | bool | int]:
         "status": "ok",
         "proxyEnabled": bool(YOUTUBE_PROXY_URL),
         "jsRuntimeBundled": BUNDLED_JS_RUNTIME_PATH.is_file(),
-        "forceIpv4": FORCE_IPV4,
         "edgeCacheSeconds": EDGE_CACHE_SECONDS,
     }
 
