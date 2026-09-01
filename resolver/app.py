@@ -1,4 +1,8 @@
 import asyncio
+import base64
+import http.cookiejar
+import ipaddress
+import itertools
 import json
 import os
 import re
@@ -8,8 +12,8 @@ import time
 from collections import defaultdict, deque
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, urlencode, urlsplit
-from urllib.request import Request as UrlRequest, urlopen
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
+from urllib.request import HTTPCookieProcessor, Request as UrlRequest, build_opener, urlopen
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -80,15 +84,71 @@ MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
 KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "1").lower() in {"1", "true", "yes"}
 REDIRECTOR_BASE_URL = "https://r.0cm.org/?url="
 KSYNC_BASE_URL = "https://ksync.arcanescripts.com/custom/redir-url?videoUrl="
-NICOVRC_BASE_URL = "https://nicovrc.net/?url="
-NICOVIDEO_LIFE_BASE_URL = "https://www.nicovideo.life/watch?v="
 NICONICO_HOSTS = {
     "nicovideo.jp",
     "www.nicovideo.jp",
     "sp.nicovideo.jp",
-    "live.nicovideo.jp",
 }
-NICONICO_ID_PATTERN = re.compile(r"(?:sm|so|nm|lv|co)\d+", re.IGNORECASE)
+NICONICO_ID_PATTERN = re.compile(r"(?:(?:sm|so|nm|nl)\d+|\d+)", re.IGNORECASE)
+NICONICO_API_BASE_URL = "https://nvapi.nicovideo.jp"
+NICONICO_DELIVERY_HOST = "delivery.domand.nicovideo.jp"
+NICONICO_ASSET_HOST = "asset.domand.nicovideo.jp"
+NICONICO_FRONTEND_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 Chrome/137.0.0.0 Safari/537.36",
+    "X-Frontend-ID": "6",
+    "X-Frontend-Version": "0",
+}
+STREAM_SOURCE_HOST_ROOTS = (
+    "bilibili.com",
+    "bilibili.tv",
+    "b23.tv",
+    "x.com",
+    "twitter.com",
+    "tiktok.com",
+    "mellow-fan.com",
+    "openrec.tv",
+    "twitcasting.tv",
+    "abema.tv",
+    "tver.jp",
+    "piapro.jp",
+    "soundcloud.com",
+    "video.fc2.com",
+)
+DIRECT_STREAM_EXTENSIONS = (
+    ".mp4",
+    ".webm",
+    ".m4v",
+    ".mov",
+    ".m3u8",
+    ".mpd",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".wav",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".avif",
+)
+STREAM_FORMAT_SELECTOR = os.getenv(
+    "STREAM_FORMAT_SELECTOR",
+    "best[protocol^=m3u8][vcodec!=none][acodec!=none]/"
+    "best[ext=mp4][vcodec!=none][acodec!=none]/"
+    "best[vcodec!=none][acodec!=none]",
+)
+STREAM_TOKEN_SECONDS = max(60, min(3600, int(os.getenv("STREAM_TOKEN_SECONDS", "1800"))))
+STREAM_MANIFEST_MAX_BYTES = max(
+    65536, min(2_000_000, int(os.getenv("STREAM_MANIFEST_MAX_BYTES", "1000000")))
+)
+STREAM_MEDIA_MAX_BYTES = max(
+    1_000_000, min(32_000_000, int(os.getenv("STREAM_MEDIA_MAX_BYTES", "12000000")))
+)
+STREAM_PROXY_BASE_URL = "https://video.piloton.cc/stream/media?token="
+STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~-]{16,256}")
 
 _cache: dict[str, tuple[float, str]] = {}
 _metadata_cache: dict[str, tuple[float, dict]] = {}
@@ -96,6 +156,7 @@ _requests: dict[str, deque[float]] = defaultdict(deque)
 _extract_slots = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTS)
 _metadata_slots = asyncio.Semaphore(2)
 _redgifs_slots = asyncio.Semaphore(4)
+_stream_slots = asyncio.Semaphore(2)
 _redgifs_token: tuple[float, str] | None = None
 _redgifs_token_lock = threading.Lock()
 
@@ -245,7 +306,11 @@ def _validate_redgifs_url(value: str) -> str:
     return path_parts[1]
 
 
-def _build_stream_redirect_url(value: str) -> tuple[str, str]:
+def _host_matches(host: str, root: str) -> bool:
+    return host == root or host.endswith(f".{root}")
+
+
+def _validate_stream_source_url(value: str) -> tuple[str, str | None]:
     if len(value) > 2048:
         raise HTTPException(status_code=400, detail="URL is too long")
 
@@ -273,10 +338,286 @@ def _build_stream_redirect_url(value: str) -> tuple[str, str]:
             or not NICONICO_ID_PATTERN.fullmatch(path_parts[1])
         ):
             raise HTTPException(status_code=400, detail="A NicoNico watch URL is required")
-        video_id = path_parts[1].lower()
-        return f"{NICOVIDEO_LIFE_BASE_URL}{quote(video_id, safe='')}", "nicovideo-life"
+        return "niconico", path_parts[1].lower()
 
-    return f"{NICOVRC_BASE_URL}{quote(value, safe='')}", "nicovrc"
+    if host.endswith(".nicovideo.jp") or host == "nicovideo.jp":
+        raise HTTPException(status_code=400, detail="NicoNico Live is not supported in original mode")
+
+    if any(_host_matches(host, root) for root in STREAM_SOURCE_HOST_ROOTS):
+        return "extract", None
+
+    if parsed.path.lower().endswith(DIRECT_STREAM_EXTENSIONS):
+        return "direct", None
+
+    raise HTTPException(status_code=400, detail="This site is not supported in original mode")
+
+
+def _validate_direct_media_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("Invalid media URL") from error
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or host == "localhost"
+        or host.endswith(".localhost")
+        or host.endswith(".local")
+    ):
+        raise ValueError("Unexpected media URL")
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        if not address.is_global:
+            raise ValueError("Private media addresses are not allowed")
+
+    return value
+
+
+def _extract_stream_media_url(value: str) -> str:
+    options = {
+        "format": STREAM_FORMAT_SELECTOR,
+        "noplaylist": True,
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "cachedir": False,
+        "socket_timeout": 20,
+        "retries": 1,
+        "extractor_retries": 1,
+    }
+    if JS_RUNTIME:
+        runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
+        options["js_runtimes"] = {JS_RUNTIME: runtime_options}
+
+    with YoutubeDL(options) as downloader:
+        info = downloader.extract_info(value, download=False)
+
+    direct_url = info.get("url") if isinstance(info, dict) else None
+    if not isinstance(direct_url, str):
+        raise ValueError("No compatible combined stream was returned")
+    return _validate_direct_media_url(direct_url)
+
+
+def _encode_stream_token(upstream_url: str, domand_cookie: str) -> str:
+    expires_at = int(time.time()) + STREAM_TOKEN_SECONDS
+    payload = json.dumps(
+        [upstream_url, domand_cookie, expires_at],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _validate_niconico_upstream_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid stream token") from error
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    allowed_path = (
+        host == NICONICO_DELIVERY_HOST and parsed.path.startswith("/hlsbid/")
+    ) or (
+        host == NICONICO_ASSET_HOST and parsed.path.startswith("/")
+    )
+    if (
+        parsed.scheme != "https"
+        or not allowed_path
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+    ):
+        raise HTTPException(status_code=400, detail="Invalid stream target")
+    return value
+
+
+def _decode_stream_token(token: str) -> tuple[str, str]:
+    if len(token) > 12000:
+        raise HTTPException(status_code=400, detail="Invalid stream token")
+
+    try:
+        padding = "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(token + padding))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=400, detail="Invalid stream token") from error
+
+    if not isinstance(payload, list) or len(payload) != 3:
+        raise HTTPException(status_code=400, detail="Invalid stream token")
+    upstream_url, domand_cookie, expires_at = payload
+    if (
+        not isinstance(upstream_url, str)
+        or not isinstance(domand_cookie, str)
+        or not STREAM_COOKIE_PATTERN.fullmatch(domand_cookie)
+        or not isinstance(expires_at, int)
+        or expires_at < int(time.time())
+        or expires_at > int(time.time()) + 3600
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid stream token")
+
+    return _validate_niconico_upstream_url(upstream_url), domand_cookie
+
+
+def _proxy_stream_url(upstream_url: str, domand_cookie: str) -> str:
+    token = _encode_stream_token(upstream_url, domand_cookie)
+    return f"{STREAM_PROXY_BASE_URL}{quote(token, safe='')}"
+
+
+def _rewrite_hls_manifest(manifest: str, base_url: str, domand_cookie: str) -> str:
+    def replace_uri(match: re.Match) -> str:
+        absolute_url = urljoin(base_url, match.group(1))
+        _validate_niconico_upstream_url(absolute_url)
+        return f'URI="{_proxy_stream_url(absolute_url, domand_cookie)}"'
+
+    rewritten = []
+    for line in manifest.splitlines():
+        if line.startswith("#"):
+            rewritten.append(re.sub(r'URI="([^"]+)"', replace_uri, line))
+        elif line.strip():
+            absolute_url = urljoin(base_url, line.strip())
+            _validate_niconico_upstream_url(absolute_url)
+            rewritten.append(_proxy_stream_url(absolute_url, domand_cookie))
+        else:
+            rewritten.append(line)
+    return "\n".join(rewritten) + "\n"
+
+
+def _read_niconico_resource(
+    upstream_url: str,
+    domand_cookie: str,
+    range_header: str | None = None,
+) -> tuple[bytes, int, str, dict[str, str], str]:
+    request_headers = {
+        "Cookie": f"domand_bid={domand_cookie}",
+        "User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"],
+    }
+    if range_header and re.fullmatch(r"bytes=(?:\d+-\d*|-\d+)", range_header):
+        request_headers["Range"] = range_header
+
+    request = UrlRequest(upstream_url, headers=request_headers, method="GET")
+    with urlopen(request, timeout=25) as response:
+        final_url = _validate_niconico_upstream_url(response.geturl())
+        content_type = response.headers.get("Content-Type", "application/octet-stream")
+        is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
+        max_bytes = STREAM_MANIFEST_MAX_BYTES if is_manifest else STREAM_MEDIA_MAX_BYTES
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > max_bytes:
+            raise ValueError("Stream response is too large")
+        body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise ValueError("Stream response is too large")
+        forwarded_headers = {
+            name: response.headers[name]
+            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+            if response.headers.get(name)
+        }
+        return body, response.status, content_type, forwarded_headers, final_url
+
+
+def _create_niconico_manifest(video_id: str) -> str:
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = build_opener(HTTPCookieProcessor(cookie_jar))
+    action_track_id = f"AAAAAAAAAA_{round(time.time() * 1000)}"
+    watch_url = (
+        f"https://www.nicovideo.jp/api/watch/v3_guest/{quote(video_id, safe='')}?"
+        f"{urlencode({'actionTrackId': action_track_id})}"
+    )
+    watch_request = UrlRequest(watch_url, headers=NICONICO_FRONTEND_HEADERS, method="GET")
+    with opener.open(watch_request, timeout=20) as response:
+        watch_payload = json.load(response)
+
+    if watch_payload.get("meta", {}).get("status") != 200:
+        raise ValueError("NicoNico video is unavailable")
+    watch_data = watch_payload.get("data")
+    if not isinstance(watch_data, dict):
+        raise ValueError("NicoNico watch data is missing")
+
+    media = watch_data.get("media")
+    domand = media.get("domand") if isinstance(media, dict) else None
+    client = watch_data.get("client")
+    if not isinstance(domand, dict) or not isinstance(client, dict):
+        raise ValueError("NicoNico stream data is missing")
+    videos = [
+        item.get("id")
+        for item in domand.get("videos", [])
+        if isinstance(item, dict)
+        and item.get("isAvailable")
+        and isinstance(item.get("id"), str)
+    ]
+    videos_at_or_below_720p = [
+        video
+        for video in videos
+        if not (height_match := re.search(r"-(\d+)p(?:-|$)", video))
+        or int(height_match.group(1)) <= 720
+    ]
+    if videos_at_or_below_720p:
+        videos = videos_at_or_below_720p
+    audios = [
+        item.get("id")
+        for item in domand.get("audios", [])
+        if isinstance(item, dict)
+        and item.get("isAvailable")
+        and isinstance(item.get("id"), str)
+    ]
+    access_key = domand.get("accessRightKey")
+    watch_track_id = client.get("watchTrackId")
+    if not videos or not audios or not access_key or not watch_track_id:
+        raise ValueError("NicoNico has no public stream formats")
+
+    access_url = (
+        f"{NICONICO_API_BASE_URL}/v1/watch/{quote(video_id, safe='')}/access-rights/hls?"
+        f"{urlencode({'actionTrackId': watch_track_id})}"
+    )
+    access_headers = {
+        **NICONICO_FRONTEND_HEADERS,
+        "Accept": "application/json;charset=utf-8",
+        "Content-Type": "application/json",
+        "X-Access-Right-Key": access_key,
+        "X-Request-With": "https://www.nicovideo.jp",
+    }
+    access_body = json.dumps(
+        {"outputs": list(itertools.product(videos, audios))},
+        separators=(",", ":"),
+    ).encode()
+    access_request = UrlRequest(
+        access_url,
+        data=access_body,
+        headers=access_headers,
+        method="POST",
+    )
+    with opener.open(access_request, timeout=20) as response:
+        access_payload = json.load(response)
+    access_data = access_payload.get("data")
+    master_url = access_data.get("contentUrl") if isinstance(access_data, dict) else None
+    if not isinstance(master_url, str):
+        raise ValueError("NicoNico did not return an HLS manifest")
+    _validate_niconico_upstream_url(master_url)
+
+    domand_cookie = next(
+        (cookie.value for cookie in cookie_jar if cookie.name == "domand_bid"),
+        None,
+    )
+    if not domand_cookie or not STREAM_COOKIE_PATTERN.fullmatch(domand_cookie):
+        raise ValueError("NicoNico stream cookie is missing")
+
+    body, _, _, _, final_url = _read_niconico_resource(master_url, domand_cookie)
+    try:
+        manifest = body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("NicoNico returned an invalid HLS manifest") from error
+    if not manifest.startswith("#EXTM3U"):
+        raise ValueError("NicoNico returned an invalid HLS manifest")
+    return _rewrite_hls_manifest(manifest, final_url, domand_cookie)
 
 
 def _check_rate_limit(client: str) -> None:
@@ -591,14 +932,94 @@ async def health() -> dict[str, str | bool | int]:
 
 @app.get("/stream")
 async def resolve_stream(
+    request: Request,
     url: str = Query(min_length=1, max_length=2048),
-) -> RedirectResponse:
-    redirect_url, route = _build_stream_redirect_url(url)
+) -> Response:
+    route, video_id = _validate_stream_source_url(url)
+    client = request.client.host if request.client else "unknown"
+    _check_rate_limit(client)
+
+    if route == "direct":
+        return RedirectResponse(
+            _validate_direct_media_url(url),
+            status_code=307,
+            headers={"Cache-Control": "no-store", "X-Resolver-Path": "direct-media"},
+        )
+
+    try:
+        async with _stream_slots:
+            if route == "niconico" and video_id:
+                manifest = await asyncio.to_thread(_create_niconico_manifest, video_id)
+                return Response(
+                    content=manifest,
+                    media_type="application/vnd.apple.mpegurl",
+                    headers={
+                        "Access-Control-Allow-Origin": "*",
+                        "Cache-Control": "no-store",
+                        "X-Resolver-Path": "original-niconico-hls",
+                    },
+                )
+            direct_url = await asyncio.to_thread(_extract_stream_media_url, url)
+    except DownloadError as error:
+        print(f"stream extraction failed: {error}", file=sys.stderr, flush=True)
+        raise HTTPException(
+            status_code=422,
+            detail="The site did not provide a VRChat-compatible combined stream",
+        ) from error
+    except HTTPError as error:
+        print(f"stream source returned HTTP {error.code}", file=sys.stderr, flush=True)
+        status_code = 404 if error.code == 404 else 502
+        raise HTTPException(status_code=status_code, detail="Could not open the stream source") from error
+    except (URLError, TimeoutError, json.JSONDecodeError, ValueError, OSError) as error:
+        print(f"original stream resolver failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not create the original stream") from error
+
     return RedirectResponse(
-        redirect_url,
+        direct_url,
         status_code=307,
-        headers={"Cache-Control": "no-store", "X-Resolver-Path": route},
+        headers={"Cache-Control": "no-store", "X-Resolver-Path": "original-direct-media"},
     )
+
+
+@app.get("/stream/media")
+async def proxy_niconico_media(
+    request: Request,
+    token: str = Query(min_length=1, max_length=12000),
+) -> Response:
+    upstream_url, domand_cookie = _decode_stream_token(token)
+    range_header = request.headers.get("range")
+    try:
+        body, status_code, content_type, upstream_headers, final_url = await asyncio.to_thread(
+            _read_niconico_resource,
+            upstream_url,
+            domand_cookie,
+            range_header,
+        )
+    except HTTPError as error:
+        print(f"NicoNico media returned HTTP {error.code}", file=sys.stderr, flush=True)
+        status = 410 if error.code in {401, 403, 404} else 502
+        raise HTTPException(status_code=status, detail="The stream has expired") from error
+    except (URLError, TimeoutError, ValueError, OSError) as error:
+        print(f"NicoNico media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not read the stream") from error
+
+    is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
+    response_headers = {
+        **upstream_headers,
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store" if is_manifest else "public, max-age=300",
+        "Content-Type": "application/vnd.apple.mpegurl" if is_manifest else content_type,
+        "X-Resolver-Path": "original-niconico-manifest" if is_manifest else "original-niconico-media",
+    }
+    if is_manifest:
+        try:
+            manifest = body.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise HTTPException(status_code=502, detail="Invalid stream manifest") from error
+        body = _rewrite_hls_manifest(manifest, final_url, domand_cookie).encode()
+        status_code = 200
+
+    return Response(content=body, status_code=status_code, headers=response_headers)
 
 
 @app.get("/resolve")

@@ -1,6 +1,6 @@
 # Piloton Video URL Resolver
 
-`vrchat-youtube.html` の公開YouTube動画URL転送と、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当する小さなバックエンドです。動画本体は中継しません。
+`vrchat-youtube.html` の公開YouTube動画URL転送、`vrchat-stream.html` の独自Stream変換、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当するバックエンドです。ニコニコ動画のHLSだけは、再生に必要な一時Cookieを付けるため動画断片も中継します。
 
 ## DockHostingで無料運用
 
@@ -23,12 +23,14 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 ## 構成
 
 - `GET /health` — 稼働確認
-- `GET /stream?url=<動画・配信URL>` — ニコニコ動画などをVRChatのLive・Streamモード用外部変換先へ転送
+- `GET /stream?url=<動画URL>` — ニコニコ動画は独自HLSを生成し、その他の対応サイトは直接メディアURLを解析
+- `GET /stream/media?token=<一時トークン>` — ニコニコ動画のHLSプレイリストと動画断片を期限付きで中継
 - `GET /resolve?url=<YouTube URL>` — YouTube URLを検証して一時的な `googlevideo.com` URLへ転送
 - `GET /youtube/info?url=<YouTube URL>` — 動画タイトルまたはプレイリスト一覧を取得し、URLで指定された再生位置を先頭にしてJSONで返却
 - `GET /redgifs/resolve?url=<RedGifs URL>` — 公開RedGifs URLを検証してHD優先のMP4 URLをJSONで返却
 - YouTubeのHTTPS動画URLだけを許可
-- Stream変換は公開HTTPS URLだけを許可し、ニコニコ動画・生放送は `nicovideo.life`、その他は `nicovrc.net` へ転送
+- Stream変換は公開HTTPS URLだけを許可し、`nicovideo.life` と `nicovrc.net` は使用しない
+- ニコニコ動画は公式のゲスト視聴APIと配信CDNだけを使用し、ログインCookieは保存・使用しない
 - RedGifsは公式サイトのHTTPS視聴・埋め込みURLだけを許可し、公式APIへ問い合わせ
 - シェルを使わずyt-dlpを実行
 - VRChatと相性のよい `WEB_EMBEDDED_PLAYER` の映像・音声一体型MP4を優先し、失敗時は別クライアントへ切替
@@ -36,6 +38,7 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 - プレイリストは最大200件（`PLAYLIST_MAX_ITEMS` で変更可能）
 - 簡易キャッシュ、同時実行数制限、アクセス回数制限付き
 - 通常のアクセスログは無効
+- ニコニコ動画の中継は通信量を消費するため、小規模利用を前提とする
 
 ## 設置
 

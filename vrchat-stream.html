@@ -273,7 +273,7 @@
       <div class="hero">
         <span class="hero-kicker">VRChat Live / Stream Helper</span>
         <h1><span class="gradient-title">Stream URL</span><br>コンバーター</h1>
-        <p>ニコニコ動画・生放送などのURLを、VRChat動画プレイヤーのLiveモード（Streamモード）で使うリンクへ変換します。</p>
+        <p>ニコニコ動画などのURLを、VRChat動画プレイヤーのLiveモード（Streamモード）で使うPiloton独自リンクへ変換します。</p>
       </div>
 
       <section class="glass-card converter-card" aria-label="Stream URL変換ツール">
@@ -305,10 +305,9 @@
 
       <section class="glass-card support-card" aria-label="対応サイト">
         <h2>対応サイト</h2>
-        <p class="support-copy">すべて <code>video.piloton.cc</code> のリンクに変換します。ニコニコ動画・生放送は専用経路、下記サービスと動画・画像の直接URLはnicovrcの汎用経路を利用します。</p>
+        <p class="support-copy">すべて <code>video.piloton.cc</code> のリンクに変換します。ニコニコ動画はPiloton側でHLSを生成・中継し、それ以外はPiloton側で直接メディアURLを解析します。</p>
         <div class="site-tags" aria-label="対応サービス一覧">
           <span class="site-tag">ニコニコ動画</span>
-          <span class="site-tag">ニコニコ生放送</span>
           <span class="site-tag">bilibili</span>
           <span class="site-tag">X / Twitter</span>
           <span class="site-tag">TikTok</span>
@@ -323,12 +322,11 @@
         </div>
         <div class="quick-links">
           <a class="home-link" href="vrchat-youtube.html">YouTube変換はこちら</a>
-          <a class="home-link" href="https://nicovrc.net/supported-sites" target="_blank" rel="noopener noreferrer">提供元の対応サイト一覧 ↗</a>
         </div>
       </section>
 
       <aside class="notice">
-        入口にはvideo.piloton.ccを使用しますが、実際の再生処理では外部サービス（nicovideo.life / nicovrc.net）へ転送され、入力したURLとアクセス情報が提供元へ送信されます。アカウントログインが必要な動画や一部公式動画は再生できない場合があります。VRChat側で「Allow Untrusted URLs」を有効にし、Liveモード（Streamモード）を選んでください。動画の権利と各サービスの利用規約を守って使用してください。
+        nicovideo.life / nicovrc.net は使用しません。ニコニコ動画はvideo.piloton.ccがプレイリストと動画断片を中継し、その他のサイトは配信元CDNへ直接接続します。ニコニコ生放送、ログイン必須、有料・一部公式動画には対応しません。VRChat側で「Allow Untrusted URLs」を有効にし、Liveモード（Streamモード）を選んでください。動画の権利と各サービスの利用規約を守って使用してください。
       </aside>
     </section>
   </main>
@@ -364,7 +362,7 @@
       ];
 
       const match = services.find(([roots]) => roots.some((root) => hostMatches(host, root)));
-      return match ? match[1] : '動画・画像URL';
+      return match ? match[1] : null;
     };
 
     const buildStreamUrl = (value) => {
@@ -378,19 +376,28 @@
       if (source.protocol !== 'https:' || source.username || source.password) return null;
 
       const host = source.hostname.toLowerCase();
-      const isNiconico = ['nicovideo.jp', 'www.nicovideo.jp', 'sp.nicovideo.jp', 'live.nicovideo.jp'].includes(host);
+      const isNiconico = ['nicovideo.jp', 'www.nicovideo.jp', 'sp.nicovideo.jp'].includes(host);
       if (isNiconico) {
-        const match = source.pathname.match(/^\/watch\/((?:sm|so|nm|lv|co)\d+)\/?$/i);
-        if (!match) return { error: 'ニコニコのURLは /watch/sm... または /watch/lv... の形式で入力してください。' };
-        const videoId = match[1].toLowerCase();
+        const match = source.pathname.match(/^\/watch\/((?:(?:sm|so|nm|nl)\d+|\d+))\/?$/i);
+        if (!match) return { error: 'ニコニコ動画のURLは /watch/sm... の形式で入力してください。' };
         return {
-          service: videoId.startsWith('lv') || videoId.startsWith('co') ? 'ニコニコ生放送' : 'ニコニコ動画',
+          service: 'ニコニコ動画',
           url: `${streamResolverBaseUrl}${encodeURIComponent(source.href)}`
         };
       }
 
+      if (host.endsWith('.nicovideo.jp')) {
+        return { error: 'オリジナル版は現在、ニコニコ生放送には対応していません。' };
+      }
+
+      const identifiedService = identifyService(host);
+      const isDirectMedia = /\.(?:mp4|webm|m4v|mov|m3u8|mpd|mp3|m4a|aac|ogg|wav|jpe?g|png|gif|webp|avif)$/i.test(source.pathname);
+      if (!identifiedService && !isDirectMedia) {
+        return { error: '現在のオリジナル版では、このサイトまたはURL形式に対応していません。' };
+      }
+
       return {
-        service: identifyService(host),
+        service: identifiedService || '動画・画像の直接URL',
         url: `${streamResolverBaseUrl}${encodeURIComponent(source.href)}`
       };
     };
