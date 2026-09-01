@@ -80,6 +80,15 @@ MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
 KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "1").lower() in {"1", "true", "yes"}
 REDIRECTOR_BASE_URL = "https://r.0cm.org/?url="
 KSYNC_BASE_URL = "https://ksync.arcanescripts.com/custom/redir-url?videoUrl="
+NICOVRC_BASE_URL = "https://nicovrc.net/?url="
+NICOVIDEO_LIFE_BASE_URL = "https://www.nicovideo.life/watch?v="
+NICONICO_HOSTS = {
+    "nicovideo.jp",
+    "www.nicovideo.jp",
+    "sp.nicovideo.jp",
+    "live.nicovideo.jp",
+}
+NICONICO_ID_PATTERN = re.compile(r"(?:sm|so|nm|lv|co)\d+", re.IGNORECASE)
 
 _cache: dict[str, tuple[float, str]] = {}
 _metadata_cache: dict[str, tuple[float, dict]] = {}
@@ -234,6 +243,40 @@ def _validate_redgifs_url(value: str) -> str:
         raise HTTPException(status_code=400, detail="A public HTTPS RedGifs video URL is required")
 
     return path_parts[1]
+
+
+def _build_stream_redirect_url(value: str) -> tuple[str, str]:
+    if len(value) > 2048:
+        raise HTTPException(status_code=400, detail="URL is too long")
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid URL") from error
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+    ):
+        raise HTTPException(status_code=400, detail="Only public HTTPS URLs are allowed")
+
+    if host in NICONICO_HOSTS:
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if (
+            len(path_parts) != 2
+            or path_parts[0].lower() != "watch"
+            or not NICONICO_ID_PATTERN.fullmatch(path_parts[1])
+        ):
+            raise HTTPException(status_code=400, detail="A NicoNico watch URL is required")
+        video_id = path_parts[1].lower()
+        return f"{NICOVIDEO_LIFE_BASE_URL}{quote(video_id, safe='')}", "nicovideo-life"
+
+    return f"{NICOVRC_BASE_URL}{quote(value, safe='')}", "nicovrc"
 
 
 def _check_rate_limit(client: str) -> None:
@@ -544,6 +587,18 @@ async def health() -> dict[str, str | bool | int]:
         "jsRuntimeBundled": BUNDLED_JS_RUNTIME_PATH.is_file(),
         "edgeCacheSeconds": EDGE_CACHE_SECONDS,
     }
+
+
+@app.get("/stream")
+async def resolve_stream(
+    url: str = Query(min_length=1, max_length=2048),
+) -> RedirectResponse:
+    redirect_url, route = _build_stream_redirect_url(url)
+    return RedirectResponse(
+        redirect_url,
+        status_code=307,
+        headers={"Cache-Control": "no-store", "X-Resolver-Path": route},
+    )
 
 
 @app.get("/resolve")

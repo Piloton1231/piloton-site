@@ -23,10 +23,12 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 ## 構成
 
 - `GET /health` — 稼働確認
+- `GET /stream?url=<動画・配信URL>` — ニコニコ動画などをVRChatのLive・Streamモード用外部変換先へ転送
 - `GET /resolve?url=<YouTube URL>` — YouTube URLを検証して一時的な `googlevideo.com` URLへ転送
 - `GET /youtube/info?url=<YouTube URL>` — 動画タイトルまたはプレイリスト一覧を取得し、URLで指定された再生位置を先頭にしてJSONで返却
 - `GET /redgifs/resolve?url=<RedGifs URL>` — 公開RedGifs URLを検証してHD優先のMP4 URLをJSONで返却
 - YouTubeのHTTPS動画URLだけを許可
+- Stream変換は公開HTTPS URLだけを許可し、ニコニコ動画・生放送は `nicovideo.life`、その他は `nicovrc.net` へ転送
 - RedGifsは公式サイトのHTTPS視聴・埋め込みURLだけを許可し、公式APIへ問い合わせ
 - シェルを使わずyt-dlpを実行
 - VRChatと相性のよい `WEB_EMBEDDED_PLAYER` の映像・音声一体型MP4を優先し、失敗時は別クライアントへ切替

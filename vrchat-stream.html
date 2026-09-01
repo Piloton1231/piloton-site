@@ -305,7 +305,7 @@
 
       <section class="glass-card support-card" aria-label="対応サイト">
         <h2>対応サイト</h2>
-        <p class="support-copy">ニコニコ動画・生放送は専用形式に変換します。下記サービスと動画・画像の直接URLは、nicovrcの汎用変換を利用します。</p>
+        <p class="support-copy">すべて <code>video.piloton.cc</code> のリンクに変換します。ニコニコ動画・生放送は専用経路、下記サービスと動画・画像の直接URLはnicovrcの汎用経路を利用します。</p>
         <div class="site-tags" aria-label="対応サービス一覧">
           <span class="site-tag">ニコニコ動画</span>
           <span class="site-tag">ニコニコ生放送</span>
@@ -328,7 +328,7 @@
       </section>
 
       <aside class="notice">
-        変換後の再生は外部サービス（nicovideo.life / nicovrc.net）を利用し、入力したURLとアクセス情報が提供元へ送信されます。アカウントログインが必要な動画や一部公式動画は再生できない場合があります。VRChat側で「Allow Untrusted URLs」を有効にし、Liveモード（Streamモード）を選んでください。動画の権利と各サービスの利用規約を守って使用してください。
+        入口にはvideo.piloton.ccを使用しますが、実際の再生処理では外部サービス（nicovideo.life / nicovrc.net）へ転送され、入力したURLとアクセス情報が提供元へ送信されます。アカウントログインが必要な動画や一部公式動画は再生できない場合があります。VRChat側で「Allow Untrusted URLs」を有効にし、Liveモード（Streamモード）を選んでください。動画の権利と各サービスの利用規約を守って使用してください。
       </aside>
     </section>
   </main>
@@ -345,6 +345,7 @@
     const openLink = document.getElementById('open-link');
     const resultMessage = document.getElementById('result-message');
     const defaultMessage = 'HTTPSの動画・配信URLを入力してください。';
+    const streamResolverBaseUrl = 'https://video.piloton.cc/stream?url=';
 
     const hostMatches = (host, root) => host === root || host.endsWith(`.${root}`);
 
@@ -384,13 +385,13 @@
         const videoId = match[1].toLowerCase();
         return {
           service: videoId.startsWith('lv') || videoId.startsWith('co') ? 'ニコニコ生放送' : 'ニコニコ動画',
-          url: `https://www.nicovideo.life/watch?v=${encodeURIComponent(videoId)}`
+          url: `${streamResolverBaseUrl}${encodeURIComponent(source.href)}`
         };
       }
 
       return {
         service: identifyService(host),
-        url: `https://nicovrc.net/?url=${encodeURIComponent(source.href)}`
+        url: `${streamResolverBaseUrl}${encodeURIComponent(source.href)}`
       };
     };
 
