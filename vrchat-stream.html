@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="ニコニコ動画などのURLをVRChatのLive・Streamモード用URLへ変換します。">
+  <title>VRChat Stream URL | ぴーちゃんの未来館</title>
+  <link rel="stylesheet" href="gate-theme.css">
+  <style>
+    .stream-layout {
+      display: grid;
+      gap: 22px;
+    }
+
+    .hero {
+      padding: clamp(18px, 4vw, 42px) 4px 8px;
+    }
+
+    .hero-kicker,
+    .step-label,
+    .mode-badge,
+    .service-badge {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      border-radius: 999px;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+    }
+
+    .hero-kicker {
+      padding: 8px 13px;
+      border: 1px solid rgba(124, 255, 196, 0.36);
+      color: var(--green);
+      background: rgba(124, 255, 196, 0.08);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .hero h1 {
+      margin: 18px 0 14px;
+      font-size: clamp(42px, 8vw, 82px);
+      line-height: 0.98;
+      letter-spacing: -0.065em;
+    }
+
+    .gradient-title {
+      background: linear-gradient(92deg, #fff, var(--cyan) 36%, var(--pink) 72%, var(--orange));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .hero p,
+    .support-copy,
+    .notice,
+    .message {
+      color: var(--soft);
+      line-height: 1.75;
+    }
+
+    .hero p {
+      max-width: 760px;
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .converter-card,
+    .support-card {
+      padding: clamp(22px, 5vw, 42px);
+      border-radius: 32px;
+    }
+
+    .step-label {
+      margin-bottom: 11px;
+      color: var(--cyan);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 12px;
+      font-size: 18px;
+      font-weight: 900;
+    }
+
+    .input-row,
+    .result-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 12px;
+    }
+
+    .result-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .url-field {
+      min-height: 58px;
+      padding: 0 18px;
+      font-size: 16px;
+    }
+
+    .url-field[readonly] {
+      color: var(--green);
+    }
+
+    .action-button {
+      min-height: 58px;
+      border: 0;
+      border-radius: 18px;
+      padding: 0 24px;
+      color: #02101c;
+      background: linear-gradient(135deg, var(--cyan), var(--green));
+      box-shadow: 0 12px 28px rgba(61, 247, 255, 0.2);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 1000;
+      transition: transform 0.18s ease, filter 0.18s ease;
+    }
+
+    .action-button:hover,
+    .action-button:focus-visible {
+      transform: translateY(-2px);
+      filter: brightness(1.08);
+      outline: none;
+    }
+
+    .action-button:active {
+      transform: scale(0.98);
+    }
+
+    .action-button.ghost {
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: var(--soft);
+      background: rgba(255, 255, 255, 0.07);
+      box-shadow: none;
+    }
+
+    .action-button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      filter: none;
+    }
+
+    .message {
+      min-height: 24px;
+      margin: 12px 2px 0;
+      font-size: 14px;
+    }
+
+    .message.error { color: #ff8faa; }
+    .message.success { color: var(--green); }
+
+    .divider {
+      height: 1px;
+      margin: 30px 0;
+      background: linear-gradient(90deg, transparent, rgba(61, 247, 255, 0.42), transparent);
+    }
+
+    .result-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .mode-badge {
+      padding: 7px 11px;
+      border: 1px solid rgba(124, 255, 196, 0.46);
+      color: var(--green);
+      background: rgba(124, 255, 196, 0.1);
+      font-size: 11px;
+    }
+
+    .service-badge {
+      padding: 7px 11px;
+      border: 1px solid rgba(61, 247, 255, 0.36);
+      color: var(--cyan);
+      background: rgba(61, 247, 255, 0.08);
+      font-size: 11px;
+    }
+
+    .result-label {
+      margin: 0 0 8px;
+      color: var(--soft);
+      font-size: 13px;
+    }
+
+    .open-link {
+      display: inline-flex;
+      margin-top: 14px;
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 900;
+      text-decoration: none;
+    }
+
+    .open-link:hover,
+    .open-link:focus-visible {
+      color: #fff;
+      outline: none;
+    }
+
+    .support-card h2 {
+      margin: 0 0 8px;
+      font-size: clamp(24px, 4vw, 34px);
+    }
+
+    .support-copy {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .site-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-top: 18px;
+    }
+
+    .site-tag {
+      padding: 8px 11px;
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 999px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.06);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .quick-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .notice {
+      padding: 18px 20px;
+      border: 1px solid rgba(255, 177, 74, 0.34);
+      border-radius: 20px;
+      color: #ffe2b5;
+      background: rgba(255, 177, 74, 0.08);
+      font-size: 13px;
+    }
+
+    [hidden] { display: none !important; }
+
+    @media (max-width: 720px) {
+      .input-row,
+      .result-row {
+        grid-template-columns: 1fr;
+      }
+
+      .action-button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body class="gate-page">
+  <main class="gate-shell">
+    <header class="gate-topbar">
+      <div class="gate-brand"><span class="gate-brand-mark" aria-hidden="true"></span>Pii-chan Future Museum</div>
+      <a class="home-link" href="index.html">← HOME</a>
+    </header>
+
+    <section class="gate-stage stream-layout">
+      <div class="hero">
+        <span class="hero-kicker">VRChat Live / Stream Helper</span>
+        <h1><span class="gradient-title">Stream URL</span><br>コンバーター</h1>
+        <p>ニコニコ動画・生放送などのURLを、VRChat動画プレイヤーのLiveモード（Streamモード）で使うリンクへ変換します。</p>
+      </div>
+
+      <section class="glass-card converter-card" aria-label="Stream URL変換ツール">
+        <span class="step-label">Step 01</span>
+        <label for="source-url">動画・配信・メディアのURL</label>
+        <div class="input-row">
+          <input class="museum-field url-field" id="source-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.nicovideo.jp/watch/sm39257413">
+          <button class="action-button" id="convert-button" type="button">変換</button>
+          <button class="action-button ghost" id="clear-button" type="button" disabled>クリア</button>
+        </div>
+        <p class="message" id="input-message" role="status" aria-live="polite">HTTPSの動画・配信URLを入力してください。</p>
+
+        <section id="result" hidden>
+          <div class="divider" aria-hidden="true"></div>
+          <span class="step-label">Step 02</span>
+          <div class="result-heading">
+            <span class="mode-badge">LIVE / STREAM MODE</span>
+            <span class="service-badge" id="service-name">RESULT</span>
+          </div>
+          <p class="result-label">VRChat用リンク</p>
+          <div class="result-row">
+            <input class="museum-field url-field" id="result-url" type="text" readonly>
+            <button class="action-button" id="copy-button" type="button">コピー</button>
+          </div>
+          <a class="open-link" id="open-link" href="#" target="_blank" rel="noopener noreferrer">ブラウザで動作を確認 ↗</a>
+          <p class="message success" id="result-message" role="status" aria-live="polite">リンクを作成しました。VRChatではLiveモード（Streamモード）で再生してください。</p>
+        </section>
+      </section>
+
+      <section class="glass-card support-card" aria-label="対応サイト">
+        <h2>対応サイト</h2>
+        <p class="support-copy">ニコニコ動画・生放送は専用形式に変換します。下記サービスと動画・画像の直接URLは、nicovrcの汎用変換を利用します。</p>
+        <div class="site-tags" aria-label="対応サービス一覧">
+          <span class="site-tag">ニコニコ動画</span>
+          <span class="site-tag">ニコニコ生放送</span>
+          <span class="site-tag">bilibili</span>
+          <span class="site-tag">X / Twitter</span>
+          <span class="site-tag">TikTok</span>
+          <span class="site-tag">mellow-fan / OPENREC</span>
+          <span class="site-tag">ツイキャス</span>
+          <span class="site-tag">Abema</span>
+          <span class="site-tag">TVer</span>
+          <span class="site-tag">piapro</span>
+          <span class="site-tag">SoundCloud</span>
+          <span class="site-tag">FC2動画</span>
+          <span class="site-tag">動画・画像の直接URL</span>
+        </div>
+        <div class="quick-links">
+          <a class="home-link" href="vrchat-youtube.html">YouTube変換はこちら</a>
+          <a class="home-link" href="https://nicovrc.net/supported-sites" target="_blank" rel="noopener noreferrer">提供元の対応サイト一覧 ↗</a>
+        </div>
+      </section>
+
+      <aside class="notice">
+        変換後の再生は外部サービス（nicovideo.life / nicovrc.net）を利用し、入力したURLとアクセス情報が提供元へ送信されます。アカウントログインが必要な動画や一部公式動画は再生できない場合があります。VRChat側で「Allow Untrusted URLs」を有効にし、Liveモード（Streamモード）を選んでください。動画の権利と各サービスの利用規約を守って使用してください。
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const sourceInput = document.getElementById('source-url');
+    const convertButton = document.getElementById('convert-button');
+    const clearButton = document.getElementById('clear-button');
+    const inputMessage = document.getElementById('input-message');
+    const result = document.getElementById('result');
+    const serviceName = document.getElementById('service-name');
+    const resultUrl = document.getElementById('result-url');
+    const copyButton = document.getElementById('copy-button');
+    const openLink = document.getElementById('open-link');
+    const resultMessage = document.getElementById('result-message');
+    const defaultMessage = 'HTTPSの動画・配信URLを入力してください。';
+
+    const hostMatches = (host, root) => host === root || host.endsWith(`.${root}`);
+
+    const identifyService = (host) => {
+      const services = [
+        [['bilibili.com', 'bilibili.tv', 'b23.tv'], 'bilibili'],
+        [['x.com', 'twitter.com'], 'X / Twitter'],
+        [['tiktok.com'], 'TikTok'],
+        [['mellow-fan.com', 'openrec.tv'], 'mellow-fan / OPENREC'],
+        [['twitcasting.tv'], 'ツイキャス'],
+        [['abema.tv'], 'Abema'],
+        [['tver.jp'], 'TVer'],
+        [['piapro.jp'], 'piapro'],
+        [['soundcloud.com'], 'SoundCloud'],
+        [['video.fc2.com'], 'FC2動画']
+      ];
+
+      const match = services.find(([roots]) => roots.some((root) => hostMatches(host, root)));
+      return match ? match[1] : '動画・画像URL';
+    };
+
+    const buildStreamUrl = (value) => {
+      let source;
+      try {
+        source = new URL(value);
+      } catch {
+        return null;
+      }
+
+      if (source.protocol !== 'https:' || source.username || source.password) return null;
+
+      const host = source.hostname.toLowerCase();
+      const isNiconico = ['nicovideo.jp', 'www.nicovideo.jp', 'sp.nicovideo.jp', 'live.nicovideo.jp'].includes(host);
+      if (isNiconico) {
+        const match = source.pathname.match(/^\/watch\/((?:sm|so|nm|lv|co)\d+)\/?$/i);
+        if (!match) return { error: 'ニコニコのURLは /watch/sm... または /watch/lv... の形式で入力してください。' };
+        const videoId = match[1].toLowerCase();
+        return {
+          service: videoId.startsWith('lv') || videoId.startsWith('co') ? 'ニコニコ生放送' : 'ニコニコ動画',
+          url: `https://www.nicovideo.life/watch?v=${encodeURIComponent(videoId)}`
+        };
+      }
+
+      return {
+        service: identifyService(host),
+        url: `https://nicovrc.net/?url=${encodeURIComponent(source.href)}`
+      };
+    };
+
+    const copyText = async (text) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        resultUrl.focus();
+        resultUrl.select();
+        return document.execCommand('copy');
+      }
+    };
+
+    const convert = () => {
+      const converted = buildStreamUrl(sourceInput.value.trim());
+      result.hidden = true;
+
+      if (!converted) {
+        inputMessage.textContent = 'HTTPSで始まる正しいURLを入力してください。';
+        inputMessage.className = 'message error';
+        return;
+      }
+
+      if (converted.error) {
+        inputMessage.textContent = converted.error;
+        inputMessage.className = 'message error';
+        return;
+      }
+
+      serviceName.textContent = converted.service;
+      resultUrl.value = converted.url;
+      openLink.href = converted.url;
+      resultMessage.textContent = 'リンクを作成しました。VRChatではLiveモード（Streamモード）で再生してください。';
+      resultMessage.className = 'message success';
+      inputMessage.textContent = `${converted.service}用のリンクを作成しました。`;
+      inputMessage.className = 'message success';
+      result.hidden = false;
+    };
+
+    const clear = () => {
+      sourceInput.value = '';
+      result.hidden = true;
+      resultUrl.value = '';
+      openLink.href = '#';
+      inputMessage.textContent = defaultMessage;
+      inputMessage.className = 'message';
+      clearButton.disabled = true;
+      sourceInput.focus();
+    };
+
+    sourceInput.addEventListener('input', () => {
+      clearButton.disabled = sourceInput.value.length === 0;
+    });
+
+    sourceInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') convert();
+    });
+
+    convertButton.addEventListener('click', convert);
+    clearButton.addEventListener('click', clear);
+    copyButton.addEventListener('click', async () => {
+      const copied = await copyText(resultUrl.value);
+      resultMessage.textContent = copied
+        ? 'VRChat用リンクをコピーしました。Liveモード（Streamモード）で再生してください。'
+        : '自動コピーできませんでした。表示されたURLを選択してコピーしてください。';
+      resultMessage.className = copied ? 'message success' : 'message error';
+    });
+  </script>
+</body>
+</html>
