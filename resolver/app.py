@@ -115,6 +115,12 @@ STREAM_SOURCE_HOST_ROOTS = (
     "soundcloud.com",
     "video.fc2.com",
 )
+
+
+class StreamCompatibilityError(ValueError):
+    pass
+
+
 DIRECT_STREAM_EXTENSIONS = (
     ".mp4",
     ".webm",
@@ -136,9 +142,7 @@ DIRECT_STREAM_EXTENSIONS = (
 )
 STREAM_FORMAT_SELECTOR = os.getenv(
     "STREAM_FORMAT_SELECTOR",
-    "best[protocol^=m3u8][vcodec!=none][acodec!=none]/"
-    "best[ext=mp4][vcodec!=none][acodec!=none]/"
-    "best[vcodec!=none][acodec!=none]",
+    "bestvideo*+bestaudio/best",
 )
 STREAM_TOKEN_SECONDS = max(60, min(3600, int(os.getenv("STREAM_TOKEN_SECONDS", "1800"))))
 STREAM_MANIFEST_MAX_BYTES = max(
@@ -383,7 +387,138 @@ def _validate_direct_media_url(value: str) -> str:
     return value
 
 
-def _extract_stream_media_url(value: str) -> str:
+def _hls_attributes(line: str) -> dict[str, str]:
+    _, _, attributes = line.partition(":")
+    result = {}
+    for match in re.finditer(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)', attributes):
+        raw_value = match.group(2)
+        result[match.group(1)] = (
+            raw_value[1:-1] if raw_value.startswith('"') and raw_value.endswith('"') else raw_value
+        )
+    return result
+
+
+def _replace_hls_attribute(line: str, name: str, value: str, *, quoted: bool = True) -> str:
+    replacement = f'{name}="{value}"' if quoted else f"{name}={value}"
+    pattern = rf'{re.escape(name)}=(?:"[^"]*"|[^,]*)'
+    if re.search(pattern, line):
+        return re.sub(pattern, replacement, line, count=1)
+    return f"{line},{replacement}"
+
+
+def _read_public_hls_manifest(value: str) -> tuple[str, str]:
+    value = _validate_direct_media_url(value)
+    request = UrlRequest(
+        value,
+        headers={"User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]},
+        method="GET",
+    )
+    with urlopen(request, timeout=25) as response:
+        final_url = _validate_direct_media_url(response.geturl())
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > STREAM_MANIFEST_MAX_BYTES:
+            raise ValueError("HLS manifest is too large")
+        body = response.read(STREAM_MANIFEST_MAX_BYTES + 1)
+    if len(body) > STREAM_MANIFEST_MAX_BYTES:
+        raise ValueError("HLS manifest is too large")
+    try:
+        manifest = body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("The site returned an invalid HLS manifest") from error
+    if not manifest.startswith("#EXTM3U"):
+        raise ValueError("The site returned an invalid HLS manifest")
+    return manifest, final_url
+
+
+def _simplify_public_hls_master(master_url: str) -> str:
+    manifest, final_url = _read_public_hls_manifest(master_url)
+    lines = manifest.splitlines()
+    audio_lines = {}
+    variants = []
+
+    for line in lines:
+        if line.startswith("#EXT-X-MEDIA:"):
+            attributes = _hls_attributes(line)
+            if attributes.get("TYPE") == "AUDIO" and attributes.get("GROUP-ID"):
+                audio_lines[attributes["GROUP-ID"]] = line
+
+    for index, line in enumerate(lines):
+        if not line.startswith("#EXT-X-STREAM-INF:"):
+            continue
+        media_uri = next(
+            (
+                candidate.strip()
+                for candidate in lines[index + 1 :]
+                if candidate.strip() and not candidate.startswith("#")
+            ),
+            None,
+        )
+        if not media_uri:
+            continue
+        attributes = _hls_attributes(line)
+        resolution = attributes.get("RESOLUTION", "")
+        try:
+            height = int(resolution.rsplit("x", 1)[1])
+        except (IndexError, ValueError):
+            height = 0
+        codecs = attributes.get("CODECS", "").lower()
+        variants.append(
+            {
+                "line": line,
+                "uri": media_uri,
+                "audio_group": attributes.get("AUDIO"),
+                "height": height,
+                "is_h264": "avc1" in codecs,
+            }
+        )
+
+    if not variants:
+        raise ValueError("The site did not return an HLS master playlist")
+    preferred = [variant for variant in variants if 0 < variant["height"] <= 720]
+    if not preferred:
+        preferred = variants
+    selected = max(
+        preferred,
+        key=lambda variant: (variant["is_h264"], variant["height"]),
+    )
+
+    result = ["#EXTM3U"]
+    version_line = next((line for line in lines if line.startswith("#EXT-X-VERSION:")), None)
+    if version_line:
+        result.append(version_line)
+    if "#EXT-X-INDEPENDENT-SEGMENTS" in lines:
+        result.append("#EXT-X-INDEPENDENT-SEGMENTS")
+
+    audio_group = selected["audio_group"]
+    if audio_group and audio_group in audio_lines:
+        audio_line = audio_lines[audio_group]
+        attributes = _hls_attributes(audio_line)
+        audio_uri = attributes.get("URI")
+        if audio_uri:
+            absolute_audio_url = _validate_direct_media_url(urljoin(final_url, audio_uri))
+            audio_line = _replace_hls_attribute(audio_line, "URI", absolute_audio_url)
+            audio_line = _replace_hls_attribute(audio_line, "DEFAULT", "YES", quoted=False)
+            audio_line = _replace_hls_attribute(audio_line, "AUTOSELECT", "YES", quoted=False)
+            result.append(audio_line)
+
+    stream_line = re.sub(r',PATHWAY-ID=(?:"[^"]*"|[^,]*)', "", selected["line"])
+    absolute_video_url = _validate_direct_media_url(urljoin(final_url, selected["uri"]))
+    result.extend((stream_line, absolute_video_url))
+    return "\n".join(result) + "\n"
+
+
+def _stream_format_score(stream_format: dict) -> tuple[int, int, int, float]:
+    height = stream_format.get("height")
+    height = height if isinstance(height, (int, float)) else 0
+    return (
+        int(stream_format.get("ext") == "mp4"),
+        int(height <= 720),
+        int(height),
+        float(stream_format.get("tbr") or 0),
+    )
+
+
+def _extract_stream_media(value: str) -> tuple[str, str]:
     options = {
         "format": STREAM_FORMAT_SELECTOR,
         "noplaylist": True,
@@ -403,9 +538,41 @@ def _extract_stream_media_url(value: str) -> str:
         info = downloader.extract_info(value, download=False)
 
     direct_url = info.get("url") if isinstance(info, dict) else None
-    if not isinstance(direct_url, str):
-        raise ValueError("No compatible combined stream was returned")
-    return _validate_direct_media_url(direct_url)
+    if isinstance(direct_url, str):
+        return "redirect", _validate_direct_media_url(direct_url)
+    if not isinstance(info, dict):
+        raise ValueError("No stream information was returned")
+
+    formats = [stream_format for stream_format in info.get("formats", []) if isinstance(stream_format, dict)]
+    progressive_formats = []
+    for stream_format in formats:
+        format_url = stream_format.get("url")
+        if not isinstance(format_url, str):
+            continue
+        if stream_format.get("protocol") != "https":
+            continue
+        if stream_format.get("vcodec") == "none" or stream_format.get("acodec") == "none":
+            continue
+        if stream_format.get("ext") not in {"mp4", "m4v", "mov", "webm"}:
+            continue
+        progressive_formats.append(stream_format)
+    if progressive_formats:
+        selected = max(progressive_formats, key=_stream_format_score)
+        return "redirect", _validate_direct_media_url(selected["url"])
+
+    manifest_url = next(
+        (
+            stream_format.get("manifest_url")
+            for stream_format in formats
+            if isinstance(stream_format.get("manifest_url"), str)
+            and str(stream_format.get("protocol", "")).startswith("m3u8")
+        ),
+        None,
+    )
+    if manifest_url:
+        return "manifest", _simplify_public_hls_master(manifest_url)
+
+    raise StreamCompatibilityError("The site only provided separate audio and video streams")
 
 
 def _encode_stream_token(upstream_url: str, domand_cookie: str) -> str:
@@ -547,28 +714,29 @@ def _create_niconico_manifest(video_id: str) -> str:
     client = watch_data.get("client")
     if not isinstance(domand, dict) or not isinstance(client, dict):
         raise ValueError("NicoNico stream data is missing")
-    videos = [
-        item.get("id")
+    video_items = [
+        item
         for item in domand.get("videos", [])
         if isinstance(item, dict)
         and item.get("isAvailable")
         and isinstance(item.get("id"), str)
     ]
     videos_at_or_below_720p = [
-        video
-        for video in videos
-        if not (height_match := re.search(r"-(\d+)p(?:-|$)", video))
-        or int(height_match.group(1)) <= 720
+        item
+        for item in video_items
+        if not isinstance(item.get("height"), (int, float)) or item["height"] <= 720
     ]
     if videos_at_or_below_720p:
-        videos = videos_at_or_below_720p
-    audios = [
-        item.get("id")
+        video_items = videos_at_or_below_720p
+    audio_items = [
+        item
         for item in domand.get("audios", [])
         if isinstance(item, dict)
         and item.get("isAvailable")
         and isinstance(item.get("id"), str)
     ]
+    videos = [max(video_items, key=lambda item: item.get("bitRate") or 0)["id"]] if video_items else []
+    audios = [max(audio_items, key=lambda item: item.get("bitRate") or 0)["id"]] if audio_items else []
     access_key = domand.get("accessRightKey")
     watch_track_id = client.get("watchTrackId")
     if not videos or not audios or not access_key or not watch_track_id:
@@ -959,13 +1127,21 @@ async def resolve_stream(
                         "X-Resolver-Path": "original-niconico-hls",
                     },
                 )
-            direct_url = await asyncio.to_thread(_extract_stream_media_url, url)
+            stream_kind, stream_content = await asyncio.to_thread(_extract_stream_media, url)
     except DownloadError as error:
         print(f"stream extraction failed: {error}", file=sys.stderr, flush=True)
+        message = str(error).lower()
+        detail = (
+            "This content requires a login or paid subscription"
+            if "subscription" in message or "login" in message or "cookies" in message
+            else "The site did not provide a VRChat-compatible stream"
+        )
         raise HTTPException(
             status_code=422,
-            detail="The site did not provide a VRChat-compatible combined stream",
+            detail=detail,
         ) from error
+    except StreamCompatibilityError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except HTTPError as error:
         print(f"stream source returned HTTP {error.code}", file=sys.stderr, flush=True)
         status_code = 404 if error.code == 404 else 502
@@ -974,8 +1150,18 @@ async def resolve_stream(
         print(f"original stream resolver failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not create the original stream") from error
 
+    if stream_kind == "manifest":
+        return Response(
+            content=stream_content,
+            media_type="application/vnd.apple.mpegurl",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-store",
+                "X-Resolver-Path": "original-simplified-hls",
+            },
+        )
     return RedirectResponse(
-        direct_url,
+        stream_content,
         status_code=307,
         headers={"Cache-Control": "no-store", "X-Resolver-Path": "original-direct-media"},
     )

@@ -1,6 +1,6 @@
 # Piloton Video URL Resolver
 
-`vrchat-youtube.html` の公開YouTube動画URL転送、`vrchat-stream.html` の独自Stream変換、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当するバックエンドです。ニコニコ動画のHLSだけは、再生に必要な一時Cookieを付けるため動画断片も中継します。
+`vrchat-youtube.html` の公開YouTube動画URL転送、`vrchat-stream.html` の独自Stream変換、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当するバックエンドです。ニコニコ動画のHLSだけは、再生に必要な一時Cookieを付けるため動画断片も中継します。複数の映像・音声候補を含むHLSは、VRChat向けに720p以下の1組へ整理します。
 
 ## DockHostingで無料運用
 
@@ -23,7 +23,7 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 ## 構成
 
 - `GET /health` — 稼働確認
-- `GET /stream?url=<動画URL>` — ニコニコ動画は独自HLSを生成し、その他の対応サイトは直接メディアURLを解析
+- `GET /stream?url=<動画URL>` — ニコニコ動画は独自HLSを生成し、その他の対応サイトは直接メディアURLまたは整理済みHLSを返す
 - `GET /stream/media?token=<一時トークン>` — ニコニコ動画のHLSプレイリストと動画断片を期限付きで中継
 - `GET /resolve?url=<YouTube URL>` — YouTube URLを検証して一時的な `googlevideo.com` URLへ転送
 - `GET /youtube/info?url=<YouTube URL>` — 動画タイトルまたはプレイリスト一覧を取得し、URLで指定された再生位置を先頭にしてJSONで返却
