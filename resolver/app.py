@@ -19,6 +19,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from yt_dlp import YoutubeDL
+from yt_dlp.extractor.abematv import AbemaLicenseRH
+from yt_dlp.networking.exceptions import RequestError
 from yt_dlp.utils import DownloadError
 
 
@@ -141,6 +143,9 @@ STREAM_FORMAT_SELECTOR = os.getenv(
     "STREAM_FORMAT_SELECTOR",
     "bestvideo*+bestaudio/best",
 )
+STREAM_EXTRACT_TIMEOUT_SECONDS = max(
+    10, min(90, int(os.getenv("STREAM_EXTRACT_TIMEOUT_SECONDS", "35")))
+)
 STREAM_TOKEN_SECONDS = max(60, min(3600, int(os.getenv("STREAM_TOKEN_SECONDS", "1800"))))
 STREAM_MANIFEST_MAX_BYTES = max(
     65536, min(2_000_000, int(os.getenv("STREAM_MANIFEST_MAX_BYTES", "1000000")))
@@ -150,6 +155,8 @@ STREAM_MEDIA_MAX_BYTES = max(
 )
 STREAM_PROXY_BASE_URL = "https://video.piloton.cc/stream/media"
 ABEMA_KEY_PROXY_BASE_URL = "https://video.piloton.cc/stream/key.bin?token="
+TVER_MASTER_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/master.m3u8?token="
+TVER_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/media"
 STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~-]{16,256}")
 
 _cache: dict[str, tuple[float, str]] = {}
@@ -345,6 +352,16 @@ def _validate_stream_source_url(value: str) -> tuple[str, str | None]:
     if host.endswith(".nicovideo.jp") or host == "nicovideo.jp":
         raise HTTPException(status_code=400, detail="NicoNico Live is not supported in original mode")
 
+    if _host_matches(host, "soundcloud.com"):
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if (
+            len(path_parts) != 2
+            or path_parts[0].lower() in {"charts", "discover", "search", "stream", "you"}
+            or path_parts[1].lower() == "sets"
+        ):
+            raise HTTPException(status_code=400, detail="A single SoundCloud track URL is required")
+        return "extract", None
+
     if any(_host_matches(host, root) for root in STREAM_SOURCE_HOST_ROOTS):
         return "extract", None
 
@@ -505,6 +522,109 @@ def _simplify_public_hls_master(master_url: str) -> str:
     return "\n".join(result) + "\n"
 
 
+def _validate_tver_upstream_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if not (
+        host == "streaks.jp"
+        or host.endswith(".streaks.jp")
+        or host == "tver.jp"
+        or host.endswith(".tver.jp")
+    ):
+        raise ValueError("Unexpected TVer media host")
+    return value
+
+
+def _encode_tver_stream_token(upstream_url: str) -> str:
+    payload = json.dumps(
+        [_validate_tver_upstream_url(upstream_url), int(time.time()) + STREAM_TOKEN_SECONDS],
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_tver_stream_token(token: str) -> str:
+    if len(token) > 6000:
+        raise HTTPException(status_code=400, detail="Invalid TVer stream token")
+    try:
+        padding = "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(token + padding))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=400, detail="Invalid TVer stream token") from error
+    if not isinstance(payload, list) or len(payload) != 2:
+        raise HTTPException(status_code=400, detail="Invalid TVer stream token")
+    upstream_url, expires_at = payload
+    if (
+        not isinstance(upstream_url, str)
+        or not isinstance(expires_at, int)
+        or expires_at < int(time.time())
+        or expires_at > int(time.time()) + 3600
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid TVer stream token")
+    try:
+        return _validate_tver_upstream_url(upstream_url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid TVer stream target") from error
+
+
+def _tver_proxy_url(upstream_url: str) -> str:
+    token = _encode_tver_stream_token(upstream_url)
+    extension = Path(urlsplit(upstream_url).path).suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,8}", extension):
+        extension = ".bin"
+    return f"{TVER_MEDIA_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
+
+
+def _strip_hls_audio_codecs(line: str) -> str:
+    attributes = _hls_attributes(line)
+    if not attributes.get("AUDIO") or not attributes.get("CODECS"):
+        return line
+    codecs = [codec.strip() for codec in attributes["CODECS"].split(",")]
+    video_codecs = [
+        codec
+        for codec in codecs
+        if not codec.lower().startswith(("mp4a", "ac-3", "ec-3", "opus", "vorbis"))
+    ]
+    if not video_codecs:
+        return line
+    return _replace_hls_attribute(line, "CODECS", ",".join(video_codecs))
+
+
+def _rewrite_tver_hls_manifest(manifest: str, base_url: str) -> str:
+    def replace_uri(match: re.Match) -> str:
+        absolute_url = _validate_tver_upstream_url(urljoin(base_url, match.group(1)))
+        return f'URI="{_tver_proxy_url(absolute_url)}"'
+
+    rewritten = []
+    for line in manifest.splitlines():
+        if line.startswith("#"):
+            line = re.sub(r'URI="([^"]+)"', replace_uri, line)
+            if line.startswith("#EXT-X-STREAM-INF:"):
+                line = _strip_hls_audio_codecs(line)
+            rewritten.append(line)
+        elif line.strip():
+            absolute_url = _validate_tver_upstream_url(urljoin(base_url, line.strip()))
+            rewritten.append(_tver_proxy_url(absolute_url))
+        else:
+            rewritten.append(line)
+    return "\n".join(rewritten) + "\n"
+
+
+def _create_tver_wrapper(master_url: str) -> str:
+    token = _encode_tver_stream_token(master_url)
+    return (
+        "#EXTM3U\n"
+        "#EXT-X-VERSION:6\n"
+        "#EXT-X-INDEPENDENT-SEGMENTS\n"
+        f"{TVER_MASTER_PROXY_BASE_URL}{quote(token, safe='')}\n"
+    )
+
+
+def _create_tver_master(master_url: str) -> str:
+    simplified = _simplify_public_hls_master(_validate_tver_upstream_url(master_url))
+    return _rewrite_tver_hls_manifest(simplified, master_url)
+
+
 def _stream_format_score(stream_format: dict) -> tuple[int, int, int, float]:
     height = stream_format.get("height")
     height = height if isinstance(height, (int, float)) else 0
@@ -632,6 +752,10 @@ def _select_soundcloud_progressive(info: dict) -> str | None:
 
 
 def _extract_stream_media(value: str) -> tuple[str, str]:
+    source_host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    is_soundcloud = _host_matches(source_host, "soundcloud.com")
+    is_abema = _host_matches(source_host, "abema.tv")
+    is_tver = _host_matches(source_host, "tver.jp")
     options = {
         "format": STREAM_FORMAT_SELECTOR,
         "noplaylist": True,
@@ -643,11 +767,24 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
         "retries": 1,
         "extractor_retries": 1,
     }
+    if is_soundcloud:
+        options.update(
+            {
+                "playlistend": 1,
+                "playlist_items": "1",
+                "extract_flat": "discard_in_playlist",
+            }
+        )
     if JS_RUNTIME:
         runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
         options["js_runtimes"] = {JS_RUNTIME: runtime_options}
 
     with YoutubeDL(options) as downloader:
+        if is_abema:
+            abema_extractor = downloader.get_info_extractor("AbemaTV")
+            downloader._request_director.add_handler(
+                AbemaLicenseRH(ie=abema_extractor, logger=None)
+            )
         info = downloader.extract_info(value, download=False)
         if isinstance(info, dict) and info.get("extractor_key") == "AbemaTV":
             return "abema-manifest", _create_abema_manifest(downloader, info)
@@ -655,6 +792,8 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
     direct_url = info.get("url") if isinstance(info, dict) else None
     if not isinstance(info, dict):
         raise ValueError("No stream information was returned")
+    if is_soundcloud and info.get("entries") is not None:
+        raise StreamCompatibilityError("SoundCloud profiles and playlists are not supported")
     if str(info.get("extractor_key", "")).lower() == "soundcloud":
         progressive_url = _select_soundcloud_progressive(info)
         if progressive_url:
@@ -689,6 +828,8 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
         None,
     )
     if manifest_url:
+        if is_tver:
+            return "tver-wrapper", _create_tver_wrapper(manifest_url)
         return "manifest", _simplify_public_hls_master(manifest_url)
 
     raise StreamCompatibilityError("The site only provided separate audio and video streams")
@@ -805,6 +946,38 @@ def _read_niconico_resource(
         body = response.read(max_bytes + 1)
         if len(body) > max_bytes:
             raise ValueError("Stream response is too large")
+        forwarded_headers = {
+            name: response.headers[name]
+            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+            if response.headers.get(name)
+        }
+        return body, response.status, content_type, forwarded_headers, final_url
+
+
+def _read_tver_resource(
+    upstream_url: str,
+    range_header: str | None = None,
+) -> tuple[bytes, int, str, dict[str, str], str]:
+    request_headers = {"User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]}
+    if range_header and re.fullmatch(r"bytes=(?:\d+-\d*|-\d+)", range_header):
+        request_headers["Range"] = range_header
+
+    request = UrlRequest(
+        _validate_tver_upstream_url(upstream_url),
+        headers=request_headers,
+        method="GET",
+    )
+    with urlopen(request, timeout=25) as response:
+        final_url = _validate_tver_upstream_url(response.geturl())
+        content_type = response.headers.get("Content-Type", "application/octet-stream")
+        is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
+        max_bytes = STREAM_MANIFEST_MAX_BYTES if is_manifest else STREAM_MEDIA_MAX_BYTES
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > max_bytes:
+            raise ValueError("TVer stream response is too large")
+        body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise ValueError("TVer stream response is too large")
         forwarded_headers = {
             name: response.headers[name]
             for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
@@ -1262,7 +1435,10 @@ async def resolve_stream(
                         "X-Resolver-Path": "original-niconico-hls",
                     },
                 )
-            stream_kind, stream_content = await asyncio.to_thread(_extract_stream_media, url)
+            stream_kind, stream_content = await asyncio.wait_for(
+                asyncio.to_thread(_extract_stream_media, url),
+                timeout=STREAM_EXTRACT_TIMEOUT_SECONDS,
+            )
     except DownloadError as error:
         print(f"stream extraction failed: {error}", file=sys.stderr, flush=True)
         message = str(error).lower()
@@ -1281,22 +1457,23 @@ async def resolve_stream(
         print(f"stream source returned HTTP {error.code}", file=sys.stderr, flush=True)
         status_code = 404 if error.code == 404 else 502
         raise HTTPException(status_code=status_code, detail="Could not open the stream source") from error
-    except (URLError, TimeoutError, json.JSONDecodeError, ValueError, OSError) as error:
+    except (URLError, RequestError, TimeoutError, json.JSONDecodeError, ValueError, OSError) as error:
         print(f"original stream resolver failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not create the original stream") from error
 
-    if stream_kind in {"manifest", "abema-manifest"}:
+    if stream_kind in {"manifest", "abema-manifest", "tver-wrapper"}:
+        resolver_path = {
+            "manifest": "original-simplified-hls",
+            "abema-manifest": "original-abema-hls",
+            "tver-wrapper": "original-tver-hls",
+        }[stream_kind]
         return Response(
             content=stream_content,
             media_type="application/vnd.apple.mpegurl",
             headers={
                 "Access-Control-Allow-Origin": "*",
                 "Cache-Control": "no-store",
-                "X-Resolver-Path": (
-                    "original-abema-hls"
-                    if stream_kind == "abema-manifest"
-                    else "original-simplified-hls"
-                ),
+                "X-Resolver-Path": resolver_path,
             },
         )
     return RedirectResponse(
@@ -1320,6 +1497,86 @@ async def serve_abema_video_key(
             "X-Resolver-Path": "original-abema-key",
         },
     )
+
+
+@app.get("/stream/tver/master.m3u8")
+async def serve_tver_master(
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    master_url = _decode_tver_stream_token(token)
+    try:
+        manifest = await asyncio.to_thread(_create_tver_master, master_url)
+    except HTTPError as error:
+        print(f"TVer master returned HTTP {error.code}", file=sys.stderr, flush=True)
+        status = 410 if error.code in {401, 403, 404} else 502
+        raise HTTPException(status_code=status, detail="The TVer stream has expired") from error
+    except (URLError, TimeoutError, ValueError, OSError) as error:
+        print(f"TVer master proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not create the TVer stream") from error
+    return Response(
+        content=manifest,
+        media_type="application/vnd.apple.mpegurl",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            "X-Resolver-Path": "original-tver-master",
+        },
+    )
+
+
+async def _proxy_tver_media_response(request: Request, token: str) -> Response:
+    upstream_url = _decode_tver_stream_token(token)
+    range_header = request.headers.get("range")
+    try:
+        body, status_code, content_type, upstream_headers, final_url = await asyncio.to_thread(
+            _read_tver_resource,
+            upstream_url,
+            range_header,
+        )
+    except HTTPError as error:
+        print(f"TVer media returned HTTP {error.code}", file=sys.stderr, flush=True)
+        status = 410 if error.code in {401, 403, 404} else 502
+        raise HTTPException(status_code=status, detail="The TVer stream has expired") from error
+    except (URLError, TimeoutError, ValueError, OSError) as error:
+        print(f"TVer media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not read the TVer stream") from error
+
+    is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
+    response_headers = {
+        **upstream_headers,
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store" if is_manifest else "public, max-age=300",
+        "Content-Type": "application/vnd.apple.mpegurl" if is_manifest else content_type,
+        "X-Resolver-Path": "original-tver-manifest" if is_manifest else "original-tver-media",
+    }
+    if is_manifest:
+        try:
+            manifest = body.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise HTTPException(status_code=502, detail="Invalid TVer stream manifest") from error
+        body = _rewrite_tver_hls_manifest(manifest, final_url).encode()
+        status_code = 200
+
+    return Response(content=body, status_code=status_code, headers=response_headers)
+
+
+@app.get("/stream/tver/media")
+async def proxy_tver_media(
+    request: Request,
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    return await _proxy_tver_media_response(request, token)
+
+
+@app.get("/stream/tver/media.{extension}")
+async def proxy_tver_media_with_extension(
+    request: Request,
+    extension: str,
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    if not re.fullmatch(r"[a-z0-9]{1,8}", extension):
+        raise HTTPException(status_code=404, detail="Unsupported TVer stream extension")
+    return await _proxy_tver_media_response(request, token)
 
 
 async def _proxy_niconico_media_response(
