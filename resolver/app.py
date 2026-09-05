@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zlib
@@ -181,6 +182,7 @@ ABEMA_KEY_PROXY_BASE_URL = "https://video.piloton.cc/stream/key.bin?token="
 ABEMA_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/abema/media"
 TVER_MASTER_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/master.m3u8?token="
 TVER_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/media"
+TVER_MUX_MEDIA_BASE_URL = "https://video.piloton.cc/stream/tver/mux.ts?token="
 TIKTOK_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tiktok/media.mp4?token="
 RULE34VIDEO_MEDIA_PROXY_BASE_URL = (
     "https://video.piloton.cc/stream/rule34video/media.mp4?token="
@@ -203,6 +205,10 @@ TIKTOK_FORMAT_SELECTOR = os.getenv(
 TIKTOK_MEDIA_CHUNK_BYTES = max(
     1_000_000,
     min(4_000_000, int(os.getenv("TIKTOK_MEDIA_CHUNK_BYTES", "4000000"))),
+)
+TVER_MUX_TOKEN_SECONDS = max(
+    3600,
+    min(14400, int(os.getenv("TVER_MUX_TOKEN_SECONDS", "7200"))),
 )
 STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~-]{16,256}")
 
@@ -845,6 +851,281 @@ def _create_tver_master(master_url: str) -> str:
     return _rewrite_tver_hls_manifest(simplified, master_url)
 
 
+def _select_tver_track_urls(master_url: str) -> tuple[str, str]:
+    simplified = _simplify_public_hls_master(_validate_tver_upstream_url(master_url))
+    lines = simplified.splitlines()
+    audio_line = next(
+        (
+            line
+            for line in lines
+            if line.startswith("#EXT-X-MEDIA:")
+            and _hls_attributes(line).get("TYPE") == "AUDIO"
+        ),
+        None,
+    )
+    audio_url = _hls_attributes(audio_line).get("URI") if audio_line else None
+    video_url = next(
+        (
+            lines[index + 1].strip()
+            for index, line in enumerate(lines[:-1])
+            if line.startswith("#EXT-X-STREAM-INF:")
+            and lines[index + 1].strip()
+            and not lines[index + 1].startswith("#")
+        ),
+        None,
+    )
+    if not audio_url or not video_url:
+        raise StreamCompatibilityError("TVer did not provide separate video and audio tracks")
+    return _validate_tver_upstream_url(video_url), _validate_tver_upstream_url(audio_url)
+
+
+def _read_tver_track_manifest(value: str) -> tuple[list[dict], int]:
+    body, _, _, _, final_url = _read_tver_resource(value)
+    try:
+        manifest = body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("TVer returned an invalid track manifest") from error
+    if not manifest.startswith("#EXTM3U"):
+        raise ValueError("TVer returned an invalid track manifest")
+
+    media_sequence = 0
+    target_duration = 0
+    current_key_url: str | None = None
+    current_key_iv: str | None = None
+    current_duration: float | None = None
+    discontinuity = False
+    segments: list[dict] = []
+    for line in manifest.splitlines():
+        line = line.strip()
+        if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
+            media_sequence = int(line.partition(":")[2])
+        elif line.startswith("#EXT-X-TARGETDURATION:"):
+            target_duration = int(line.partition(":")[2])
+        elif line.startswith("#EXT-X-KEY:"):
+            attributes = _hls_attributes(line)
+            method = attributes.get("METHOD")
+            if method == "NONE":
+                current_key_url = None
+                current_key_iv = None
+            elif method == "AES-128" and attributes.get("URI"):
+                current_key_url = _validate_tver_upstream_url(
+                    urljoin(final_url, attributes["URI"])
+                )
+                current_key_iv = attributes.get("IV")
+                if current_key_iv and not re.fullmatch(r"0x[0-9a-fA-F]{32}", current_key_iv):
+                    raise ValueError("TVer returned an invalid encryption IV")
+            else:
+                raise StreamCompatibilityError("TVer returned unsupported stream encryption")
+        elif line.startswith(("#EXT-X-MAP:", "#EXT-X-BYTERANGE:")):
+            raise StreamCompatibilityError("TVer returned an unsupported segment format")
+        elif line == "#EXT-X-DISCONTINUITY":
+            discontinuity = True
+        elif line.startswith("#EXTINF:"):
+            current_duration = float(line.partition(":")[2].partition(",")[0])
+        elif line and not line.startswith("#"):
+            if current_duration is None or current_duration <= 0:
+                raise ValueError("TVer segment duration is missing")
+            segments.append(
+                {
+                    "url": _validate_tver_upstream_url(urljoin(final_url, line)),
+                    "duration": current_duration,
+                    "key_url": current_key_url,
+                    "key_iv": current_key_iv,
+                    "sequence": media_sequence + len(segments),
+                    "discontinuity": discontinuity,
+                }
+            )
+            current_duration = None
+            discontinuity = False
+
+    if not segments:
+        raise StreamCompatibilityError("TVer returned an empty stream")
+    return segments, max(target_duration, 1)
+
+
+def _validate_tver_mux_segment(segment: dict) -> dict:
+    if not isinstance(segment, dict):
+        raise ValueError("Invalid TVer mux segment")
+    segment_url = segment.get("url")
+    key_url = segment.get("key_url")
+    key_iv = segment.get("key_iv")
+    duration = segment.get("duration")
+    sequence = segment.get("sequence")
+    if (
+        not isinstance(segment_url, str)
+        or (key_url is not None and not isinstance(key_url, str))
+        or (key_iv is not None and not isinstance(key_iv, str))
+        or not isinstance(duration, (int, float))
+        or not 0 < duration <= 30
+        or not isinstance(sequence, int)
+        or not 0 <= sequence <= 100000
+    ):
+        raise ValueError("Invalid TVer mux segment")
+    if key_iv and not re.fullmatch(r"0x[0-9a-fA-F]{32}", key_iv):
+        raise ValueError("Invalid TVer mux encryption IV")
+    return {
+        "url": _validate_tver_upstream_url(segment_url),
+        "duration": float(duration),
+        "key_url": _validate_tver_upstream_url(key_url) if key_url else None,
+        "key_iv": key_iv,
+        "sequence": sequence,
+    }
+
+
+def _encode_tver_mux_token(video_segment: dict, audio_segment: dict) -> str:
+    payload = json.dumps(
+        [
+            _validate_tver_mux_segment(video_segment),
+            _validate_tver_mux_segment(audio_segment),
+            int(time.time()) + TVER_MUX_TOKEN_SECONDS,
+        ],
+        separators=(",", ":"),
+    ).encode()
+    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+
+
+def _decode_tver_mux_token(token: str) -> tuple[dict, dict]:
+    if len(token) > 12000 or not token.startswith("z"):
+        raise HTTPException(status_code=400, detail="Invalid TVer mux token")
+    try:
+        encoded = token[1:]
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + padding)))
+    except (ValueError, TypeError, json.JSONDecodeError, zlib.error) as error:
+        raise HTTPException(status_code=400, detail="Invalid TVer mux token") from error
+    if not isinstance(payload, list) or len(payload) != 3:
+        raise HTTPException(status_code=400, detail="Invalid TVer mux token")
+    video_segment, audio_segment, expires_at = payload
+    if (
+        not isinstance(expires_at, int)
+        or expires_at < int(time.time())
+        or expires_at > int(time.time()) + 14400
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid TVer mux token")
+    try:
+        return (
+            _validate_tver_mux_segment(video_segment),
+            _validate_tver_mux_segment(audio_segment),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid TVer mux target") from error
+
+
+def _tver_mux_segment_url(video_segment: dict, audio_segment: dict) -> str:
+    token = _encode_tver_mux_token(video_segment, audio_segment)
+    return f"{TVER_MUX_MEDIA_BASE_URL}{quote(token, safe='')}"
+
+
+def _create_tver_muxed_playlist(master_url: str) -> str:
+    video_url, audio_url = _select_tver_track_urls(master_url)
+    video_segments, video_target = _read_tver_track_manifest(video_url)
+    audio_segments, audio_target = _read_tver_track_manifest(audio_url)
+    if len(video_segments) != len(audio_segments):
+        raise StreamCompatibilityError("TVer video and audio segments do not align")
+
+    target_duration = max(video_target, audio_target)
+    result = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        "#EXT-X-PLAYLIST-TYPE:VOD",
+        f"#EXT-X-TARGETDURATION:{target_duration}",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+    ]
+    for video_segment, audio_segment in zip(video_segments, audio_segments):
+        if video_segment["discontinuity"] or audio_segment["discontinuity"]:
+            result.append("#EXT-X-DISCONTINUITY")
+        duration = max(video_segment["duration"], audio_segment["duration"])
+        result.extend(
+            (
+                f"#EXTINF:{duration:.6f},",
+                _tver_mux_segment_url(video_segment, audio_segment),
+            )
+        )
+    result.append("#EXT-X-ENDLIST")
+    return "\n".join(result) + "\n"
+
+
+def _single_tver_segment_manifest(segment: dict) -> str:
+    segment = _validate_tver_mux_segment(segment)
+    target_duration = max(1, int(segment["duration"] + 0.999999))
+    result = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        f"#EXT-X-TARGETDURATION:{target_duration}",
+        f'#EXT-X-MEDIA-SEQUENCE:{segment["sequence"]}',
+    ]
+    if segment["key_url"]:
+        key_line = f'#EXT-X-KEY:METHOD=AES-128,URI="{segment["key_url"]}"'
+        if segment["key_iv"]:
+            key_line += f',IV={segment["key_iv"]}'
+        result.append(key_line)
+    result.extend(
+        (
+            f'#EXTINF:{segment["duration"]:.6f},',
+            segment["url"],
+            "#EXT-X-ENDLIST",
+        )
+    )
+    return "\n".join(result) + "\n"
+
+
+def _mux_tver_segment(video_segment: dict, audio_segment: dict) -> bytes:
+    video_manifest = _single_tver_segment_manifest(video_segment)
+    audio_manifest = _single_tver_segment_manifest(audio_segment)
+    with tempfile.TemporaryDirectory(prefix="piloton-tver-") as temp_directory:
+        video_path = Path(temp_directory, "video.m3u8")
+        audio_path = Path(temp_directory, "audio.m3u8")
+        video_path.write_text(video_manifest, encoding="utf-8")
+        audio_path.write_text(audio_manifest, encoding="utf-8")
+        command = [
+            get_ffmpeg_exe(),
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-rw_timeout",
+            "20000000",
+            "-protocol_whitelist",
+            "file,http,https,tcp,tls,crypto",
+            "-i",
+            str(video_path),
+            "-protocol_whitelist",
+            "file,http,https,tcp,tls,crypto",
+            "-i",
+            str(audio_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c",
+            "copy",
+            "-map_metadata",
+            "-1",
+            "-muxdelay",
+            "0",
+            "-muxpreload",
+            "0",
+            "-f",
+            "mpegts",
+            "pipe:1",
+        ]
+        process = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=35,
+            check=False,
+        )
+    if process.returncode:
+        message = process.stderr.decode("utf-8", errors="replace")[-1000:]
+        print(f"TVer mux failed: {message}", file=sys.stderr, flush=True)
+        raise ValueError("Could not combine the TVer video and audio segment")
+    if not process.stdout or len(process.stdout) > STREAM_MEDIA_MAX_BYTES:
+        raise ValueError("TVer combined segment is empty or too large")
+    return process.stdout
+
+
 def _stream_format_score(stream_format: dict) -> tuple[int, int, int, float]:
     height = stream_format.get("height")
     height = height if isinstance(height, (int, float)) else 0
@@ -1451,7 +1732,7 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
     )
     if manifest_url:
         if is_tver:
-            return "tver-manifest", _create_tver_master(manifest_url)
+            return "tver-muxed-manifest", _create_tver_muxed_playlist(manifest_url)
         return "manifest", _simplify_public_hls_master(manifest_url)
 
     raise StreamCompatibilityError("The site only provided separate audio and video streams")
@@ -2258,11 +2539,17 @@ async def resolve_stream(
         print(f"original stream resolver failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not create the original stream") from error
 
-    if stream_kind in {"manifest", "abema-manifest", "tver-manifest"}:
+    if stream_kind in {
+        "manifest",
+        "abema-manifest",
+        "tver-manifest",
+        "tver-muxed-manifest",
+    }:
         resolver_path = {
             "manifest": "original-simplified-hls",
             "abema-manifest": "original-abema-hls",
             "tver-manifest": "original-tver-hls",
+            "tver-muxed-manifest": "original-tver-muxed-hls",
         }[stream_kind]
         return Response(
             content=stream_content,
@@ -2423,6 +2710,28 @@ async def proxy_tver_media_with_extension(
     if not re.fullmatch(r"[a-z0-9]{1,8}", extension):
         raise HTTPException(status_code=404, detail="Unsupported TVer stream extension")
     return await _proxy_tver_media_response(request, token)
+
+
+@app.get("/stream/tver/mux.ts")
+async def serve_tver_muxed_segment(
+    token: str = Query(min_length=1, max_length=12000),
+) -> Response:
+    video_segment, audio_segment = _decode_tver_mux_token(token)
+    try:
+        body = await asyncio.to_thread(_mux_tver_segment, video_segment, audio_segment)
+    except (subprocess.TimeoutExpired, ValueError, OSError) as error:
+        print(f"TVer segment mux failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not combine the TVer stream") from error
+    return Response(
+        content=body,
+        media_type="video/mp2t",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+            "X-Resolver-Path": "original-tver-muxed-segment",
+        },
+    )
 
 
 @app.get("/stream/tiktok/media.mp4")

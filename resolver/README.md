@@ -1,6 +1,6 @@
 # Piloton Video URL Resolver
 
-`vrchat-youtube.html` の公開YouTube動画URL転送、`vrchat-stream.html` の独自Stream変換、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当するバックエンドです。ニコニコ動画は分離された映像と音声を音声付きMP4へリアルタイム結合し、TVerのHLSはVRChatが配下の映像・音声を確実に取得できるよう動画ドメイン内で中継します。複数の映像・音声候補を含むHLSは、VRChat向けに720p以下の1組へ整理します。ABEMAの専用暗号鍵は期限付きHTTPS URLへ変換し、SoundCloudは単曲URLの直接MP3だけを短時間で解決します。
+`vrchat-youtube.html` の公開YouTube動画URL転送、`vrchat-stream.html` の独自Stream変換、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当するバックエンドです。ニコニコ動画は分離された映像と音声を音声付きMP4へリアルタイム結合します。TVerは映像・音声の各HLS断片を1本のMPEG-TSへリアルタイム結合し、VRChatが音声を含む単一トラックとして再生できるようにします。複数の映像・音声候補を含むHLSは、VRChat向けに720p以下の1組へ整理します。ABEMAの専用暗号鍵は期限付きHTTPS URLへ変換し、SoundCloudは単曲URLの直接MP3だけを短時間で解決します。
 
 ## DockHostingで無料運用
 
@@ -30,6 +30,7 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 - `GET /stream/abema/media.<拡張子>?token=<一時トークン>` — ABEMAの動画・音声一体型HLS断片を動画ドメイン内で中継
 - `GET /stream/tver/master.m3u8?token=<一時トークン>` — TVerの720p映像と既定音声をVRChat向けHLSとして返却
 - `GET /stream/tver/media.<拡張子>?token=<一時トークン>` — TVerの音声・映像プレイリスト、暗号鍵、断片を動画ドメイン内で中継
+- `GET /stream/tver/mux.ts?token=<一時トークン>` — TVerの映像・AAC音声断片をVRChat向けの1本のMPEG-TSへリアルタイム結合
 - `GET /resolve?url=<YouTube URL>` — YouTube URLを検証して一時的な `googlevideo.com` URLへ転送
 - `GET /youtube/info?url=<YouTube URL>` — 動画タイトルまたはプレイリスト一覧を取得し、URLで指定された再生位置を先頭にしてJSONで返却
 - `GET /redgifs/resolve?url=<RedGifs URL>` — 公開RedGifs URLを検証してHD優先のMP4 URLをJSONで返却
