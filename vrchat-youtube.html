@@ -453,7 +453,7 @@
       <span class="step-label">Step 01</span>
       <label for="youtube-url">動画・プレイリスト・配信URL</label>
       <div class="input-row">
-        <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="YouTube / ニコニコ動画 / X / TikTok / TVer など">
+        <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="YouTube / Instagram / ニコニコ動画 / X / TikTok など">
         <button id="create-button" type="button">変換</button>
         <button class="ghost" id="clear-button" type="button" disabled>クリア</button>
       </div>
@@ -500,7 +500,7 @@
     </section>
 
     <aside class="notice">
-      YouTubeのメインリンクはPiloton管理の変換機能を使い、Ksyncは手動で選べる予備リンクとして表示します。予備リンクでは外部サービス（r.0cm.org / ksync.arcanescripts.com）へYouTube URLとアクセス情報が送信されます。プレイリストは最大200件です。ニコニコ動画などYouTube以外の変換リンクは、VRChatのLive / Streamモードで使用してください。非公開・ログイン必須・有料コンテンツには対応しません。動画の権利と各サービスの利用規約を守って使用してください。
+      YouTubeのメインリンクはPiloton管理の変換機能を使い、Ksyncは手動で選べる予備リンクとして表示します。予備リンクでは外部サービス（r.0cm.org / ksync.arcanescripts.com）へYouTube URLとアクセス情報が送信されます。Instagramの公開投稿は外部サービス（kkinstagram.com）を経由して動画・画像URLを取得します。プレイリストは最大200件です。YouTube以外の変換リンクは、VRChatのLive / Streamモードで使用してください。非公開・ログイン必須・有料コンテンツには対応しません。動画の権利と各サービスの利用規約を守って使用してください。
     </aside>
   </main>
 
@@ -585,6 +585,7 @@
     const identifyStreamService = (host) => {
       const services = [
         [['nicovideo.jp'], 'ニコニコ動画'],
+        [['instagram.com', 'kkinstagram.com'], 'Instagram（公開投稿）'],
         [['x.com', 'twitter.com'], 'X / Twitter'],
         [['tiktok.com'], 'TikTok'],
         [['mellow-fan.com', 'openrec.tv'], 'mellow-fan / OPENREC'],
@@ -593,7 +594,10 @@
         [['tver.jp'], 'TVer'],
         [['piapro.jp'], 'piapro'],
         [['soundcloud.com'], 'SoundCloud'],
-        [['video.fc2.com'], 'FC2動画']
+        [['video.fc2.com'], 'FC2動画'],
+        [['rule34video.com'], 'Rule34Video'],
+        [['rule34.xxx'], 'Rule34.xxx'],
+        [['e621.net'], 'e621']
       ];
       const match = services.find(([roots]) => roots.some((root) => hostMatches(host, root)));
       return match ? match[1] : null;
@@ -614,6 +618,9 @@
       const service = identifyStreamService(host);
       if (service === 'ニコニコ動画' && !/^\/watch\/((?:(?:sm|so|nm|nl)\d+|\d+))\/?$/i.test(source.pathname)) {
         return { error: 'ニコニコ動画は /watch/sm... 形式の動画URLを入力してください。' };
+      }
+      if (service === 'Instagram（公開投稿）' && !/^\/(?:p|reel|reels|tv)\/[a-z0-9_-]{5,64}\/?$/i.test(source.pathname)) {
+        return { error: 'Instagramは公開投稿またはリールのURLを入力してください。' };
       }
       const directMedia = /\.(?:mp4|webm|m4v|mov|m3u8|mpd|mp3|m4a|aac|ogg|wav|jpe?g|png|gif|webp|avif)$/i.test(source.pathname);
       if (!service && !directMedia) {

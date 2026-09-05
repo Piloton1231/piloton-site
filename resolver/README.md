@@ -23,7 +23,7 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 ## 構成
 
 - `GET /health` — 稼働確認
-- `GET /stream?url=<動画URL>` — ニコニコ動画は映像・音声一体型MP4ストリーム、その他の対応サイトは直接メディアURLまたは整理済みHLSを返す
+- `GET /stream?url=<動画URL>` — ニコニコ動画は映像・音声一体型MP4ストリーム、Instagramの公開投稿はKkinstagram経由の動画・画像URL、その他の対応サイトは直接メディアURLまたは整理済みHLSを返す
 - `GET /stream/niconico/mux.mp4?token=<一時トークン>` — ニコニコ動画の映像とAAC音声を1本の断片化MP4へリアルタイム結合
 - `GET /stream/niconico/<audio|video>.<拡張子>?token=<一時トークン>` — ニコニコ動画のHLSプレイリスト、暗号鍵、動画・音声断片をトラック別に中継
 - `GET /stream/key.bin?token=<一時トークン>` — ABEMA HLS用の16バイト暗号鍵を期限付きで返却
@@ -64,6 +64,7 @@ YouTube側の変更で抽出が動かなくなることがあります。`requir
 
 ## 制限と注意
 
+- Instagram、Rule34Video、Rule34.xxx、e621を含む公開URLに対応します。InstagramはKkinstagramを外部取得経路として使用します。
 - 非公開、メンバー限定、有料、年齢制限コンテンツには対応しません。
 - GoogleアカウントのCookieや認証情報を入れないでください。
 - Vercelなど共有クラウドのIPはYouTubeに拒否される場合があります。その場合、無料構成ではKsync予備経路を利用します。

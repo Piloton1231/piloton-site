@@ -15,7 +15,14 @@ from collections import defaultdict, deque
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
-from urllib.request import HTTPCookieProcessor, ProxyHandler, Request as UrlRequest, build_opener, urlopen
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPCookieProcessor,
+    ProxyHandler,
+    Request as UrlRequest,
+    build_opener,
+    urlopen,
+)
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -104,6 +111,14 @@ NICONICO_FRONTEND_HEADERS = {
     "X-Frontend-ID": "6",
     "X-Frontend-Version": "0",
 }
+INSTAGRAM_SOURCE_HOST_ROOTS = ("instagram.com", "kkinstagram.com")
+INSTAGRAM_MEDIA_HOST_ROOTS = ("cdninstagram.com", "fbcdn.net")
+INSTAGRAM_PATH_PATTERN = re.compile(r"(?:p|reel|reels|tv)/([A-Za-z0-9_-]{5,64})", re.IGNORECASE)
+INSTAGRAM_EMBED_BASE_URL = "https://kkinstagram.com"
+INSTAGRAM_EMBED_HEADERS = {
+    "User-Agent": "Discordbot/2.0",
+    "Accept": "text/html,video/*,image/*;q=0.9,*/*;q=0.8",
+}
 STREAM_SOURCE_HOST_ROOTS = (
     "x.com",
     "twitter.com",
@@ -116,6 +131,9 @@ STREAM_SOURCE_HOST_ROOTS = (
     "piapro.jp",
     "soundcloud.com",
     "video.fc2.com",
+    "rule34video.com",
+    "rule34.xxx",
+    "e621.net",
 )
 
 
@@ -378,6 +396,15 @@ def _validate_stream_source_url(value: str) -> tuple[str, str | None]:
     if host.endswith(".nicovideo.jp") or host == "nicovideo.jp":
         raise HTTPException(status_code=400, detail="NicoNico Live is not supported in original mode")
 
+    if any(_host_matches(host, root) for root in INSTAGRAM_SOURCE_HOST_ROOTS):
+        path = parsed.path.strip("/")
+        if not INSTAGRAM_PATH_PATTERN.fullmatch(path):
+            raise HTTPException(
+                status_code=400,
+                detail="A public Instagram post or reel URL is required",
+            )
+        return "instagram", None
+
     if _host_matches(host, "soundcloud.com"):
         path_parts = [part for part in parsed.path.split("/") if part]
         if (
@@ -426,6 +453,66 @@ def _validate_direct_media_url(value: str) -> str:
             raise ValueError("Private media addresses are not allowed")
 
     return value
+
+
+def _validate_instagram_media_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if not any(_host_matches(host, root) for root in INSTAGRAM_MEDIA_HOST_ROOTS):
+        raise ValueError("Unexpected Instagram media host")
+    return value
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+def _instagram_embed_url(value: str) -> str:
+    parsed = urlsplit(value)
+    match = INSTAGRAM_PATH_PATTERN.fullmatch(parsed.path.strip("/"))
+    if not match:
+        raise ValueError("Invalid Instagram post URL")
+    kind = parsed.path.strip("/").split("/", 1)[0].lower()
+    shortcode = match.group(1)
+    return f"{INSTAGRAM_EMBED_BASE_URL}/{kind}/{quote(shortcode, safe='')}/"
+
+
+def _resolve_instagram_media(value: str) -> str:
+    opener = build_opener(_NoRedirectHandler())
+    current_url = _instagram_embed_url(value)
+
+    for _ in range(5):
+        request = UrlRequest(
+            current_url,
+            headers=INSTAGRAM_EMBED_HEADERS,
+            method="GET",
+        )
+        try:
+            response = opener.open(request, timeout=20)
+        except HTTPError as error:
+            if error.code not in {301, 302, 303, 307, 308}:
+                raise
+            location = error.headers.get("Location")
+            error.close()
+            if not location:
+                raise ValueError("Instagram embed redirect is missing")
+            next_url = urljoin(current_url, location)
+            next_host = (urlsplit(next_url).hostname or "").lower().rstrip(".")
+            if not any(_host_matches(next_host, root) for root in INSTAGRAM_MEDIA_HOST_ROOTS):
+                raise ValueError("Unexpected Instagram embed redirect")
+            current_url = _validate_instagram_media_url(next_url)
+            continue
+
+        with response:
+            final_url = response.geturl()
+            content_type = response.headers.get_content_type().lower()
+        final_url = _validate_instagram_media_url(final_url)
+        if not content_type.startswith(("video/", "image/")):
+            raise StreamCompatibilityError("The public Instagram post did not provide media")
+        return final_url
+
+    raise ValueError("Too many Instagram media redirects")
 
 
 def _hls_attributes(line: str) -> dict[str, str]:
@@ -1848,6 +1935,16 @@ async def resolve_stream(
                     headers={
                         "Cache-Control": "no-store",
                         "X-Resolver-Path": "original-niconico-mux",
+                    },
+                )
+            if route == "instagram":
+                media_url = await asyncio.to_thread(_resolve_instagram_media, url)
+                return RedirectResponse(
+                    media_url,
+                    status_code=307,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Resolver-Path": "instagram-kkinstagram",
                     },
                 )
             stream_kind, stream_content = await asyncio.wait_for(
