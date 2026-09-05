@@ -878,7 +878,7 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
     )
     if manifest_url:
         if is_tver:
-            return "tver-wrapper", _create_tver_wrapper(manifest_url)
+            return "tver-manifest", _create_tver_master(manifest_url)
         return "manifest", _simplify_public_hls_master(manifest_url)
 
     raise StreamCompatibilityError("The site only provided separate audio and video streams")
@@ -1541,11 +1541,11 @@ async def resolve_stream(
         print(f"original stream resolver failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not create the original stream") from error
 
-    if stream_kind in {"manifest", "abema-manifest", "tver-wrapper"}:
+    if stream_kind in {"manifest", "abema-manifest", "tver-manifest"}:
         resolver_path = {
             "manifest": "original-simplified-hls",
             "abema-manifest": "original-abema-hls",
-            "tver-wrapper": "original-tver-hls",
+            "tver-manifest": "original-tver-hls",
         }[stream_kind]
         return Response(
             content=stream_content,
