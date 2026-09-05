@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="video.piloton.ccの変換URLを、VRChat風プレイヤーで映像・音声・エラーまで確認できます。">
+  <title>VRChat Player Test | ぴーちゃんの未来館</title>
+  <link rel="stylesheet" href="gate-theme.css">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.7.1/dist/hls.min.js" defer></script>
+  <style>
+    .tester-layout {
+      display: grid;
+      gap: 22px;
+    }
+
+    .tester-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 6px 4px;
+    }
+
+    .tester-heading h1 {
+      margin: 8px 0 0;
+      font-size: clamp(36px, 6vw, 68px);
+      line-height: 0.98;
+      letter-spacing: -0.06em;
+    }
+
+    .gradient-title {
+      background: linear-gradient(92deg, #fff, var(--cyan) 34%, var(--pink) 72%, var(--orange));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .eyebrow,
+    .status-chip,
+    .panel-label {
+      font-weight: 900;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow {
+      color: var(--green);
+      font-size: 12px;
+    }
+
+    .tester-copy {
+      max-width: 520px;
+      margin: 0;
+      color: var(--soft);
+      font-size: 14px;
+      line-height: 1.75;
+    }
+
+    .control-card,
+    .player-card,
+    .diagnostic-card {
+      border-radius: 30px;
+    }
+
+    .control-card,
+    .diagnostic-card {
+      padding: clamp(20px, 4vw, 34px);
+    }
+
+    .control-card label {
+      display: block;
+      margin-bottom: 11px;
+      font-size: 17px;
+      font-weight: 900;
+    }
+
+    .input-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 11px;
+    }
+
+    .url-field {
+      min-height: 56px;
+      padding: 0 17px;
+      font-size: 16px;
+    }
+
+    .test-button {
+      min-height: 56px;
+      padding: 0 22px;
+      border: 0;
+      border-radius: 17px;
+      color: #02101c;
+      background: linear-gradient(135deg, var(--cyan), var(--green));
+      box-shadow: 0 12px 28px rgba(61, 247, 255, 0.2);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 1000;
+      transition: transform 0.18s ease, filter 0.18s ease;
+    }
+
+    .test-button.secondary {
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: var(--soft);
+      background: rgba(255, 255, 255, 0.07);
+      box-shadow: none;
+    }
+
+    .test-button:hover,
+    .test-button:focus-visible {
+      transform: translateY(-2px);
+      filter: brightness(1.08);
+      outline: none;
+    }
+
+    .test-button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      filter: none;
+    }
+
+    .input-message {
+      min-height: 24px;
+      margin: 11px 2px 0;
+      color: var(--soft);
+      font-size: 14px;
+    }
+
+    .input-message.success { color: var(--green); }
+    .input-message.error { color: #ff8faa; }
+
+    .player-card {
+      position: relative;
+      overflow: hidden;
+      padding: 12px;
+      background: rgba(1, 5, 15, 0.9);
+    }
+
+    .player-frame {
+      position: relative;
+      overflow: hidden;
+      aspect-ratio: 16 / 9;
+      border: 1px solid rgba(61, 247, 255, 0.35);
+      border-radius: 22px;
+      background:
+        radial-gradient(circle at 50% 45%, rgba(61, 247, 255, 0.12), transparent 34%),
+        linear-gradient(145deg, #030b1c, #0b0718 72%);
+      box-shadow: 0 0 34px rgba(61, 247, 255, 0.12) inset;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+      background: #000;
+    }
+
+    .player-overlay {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      pointer-events: none;
+      text-align: center;
+      background: radial-gradient(circle, rgba(6, 17, 40, 0.2), rgba(2, 5, 15, 0.74));
+      transition: opacity 0.2s ease;
+    }
+
+    .player-overlay[hidden] { display: none; }
+
+    .overlay-mark {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      margin: 0 auto 14px;
+      border: 1px solid var(--cyan);
+      border-radius: 18px;
+      color: var(--cyan);
+      box-shadow: 0 0 24px rgba(61, 247, 255, 0.24);
+      font-size: 23px;
+    }
+
+    .overlay-title {
+      margin: 0;
+      font-size: clamp(18px, 3vw, 27px);
+    }
+
+    .overlay-copy {
+      max-width: 580px;
+      margin: 8px auto 0;
+      color: var(--soft);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 4px 2px;
+    }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 999px;
+      color: var(--soft);
+      background: rgba(255, 255, 255, 0.06);
+      font-size: 11px;
+    }
+
+    .status-chip::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #70809d;
+    }
+
+    .status-chip.good { color: var(--green); border-color: rgba(124, 255, 196, 0.32); }
+    .status-chip.good::before { background: var(--green); box-shadow: 0 0 10px var(--green); }
+    .status-chip.warn { color: var(--orange); border-color: rgba(255, 177, 74, 0.34); }
+    .status-chip.warn::before { background: var(--orange); box-shadow: 0 0 10px var(--orange); }
+    .status-chip.bad { color: #ff8faa; border-color: rgba(255, 90, 130, 0.38); }
+    .status-chip.bad::before { background: #ff5a82; box-shadow: 0 0 10px #ff5a82; }
+
+    .diagnostic-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .diagnostic-item {
+      min-width: 0;
+      padding: 15px;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .panel-label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--soft);
+      font-size: 11px;
+    }
+
+    .diagnostic-value {
+      display: block;
+      overflow-wrap: anywhere;
+      color: var(--ink);
+      font-size: 15px;
+      font-weight: 900;
+    }
+
+    .diagnostic-footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .event-message {
+      flex: 1 1 440px;
+      margin: 0;
+      color: var(--soft);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .caution {
+      padding: 16px 18px;
+      border: 1px solid rgba(255, 177, 74, 0.34);
+      border-radius: 18px;
+      color: #ffe2b5;
+      background: rgba(255, 177, 74, 0.08);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    [hidden] { display: none !important; }
+
+    @media (max-width: 850px) {
+      .diagnostic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 640px) {
+      .input-row,
+      .diagnostic-grid { grid-template-columns: 1fr; }
+      .test-button { width: 100%; }
+      .tester-heading { align-items: start; }
+      .player-card { padding: 7px; border-radius: 24px; }
+      .player-frame { border-radius: 17px; }
+    }
+  </style>
+</head>
+<body class="gate-page">
+  <main class="gate-shell">
+    <header class="gate-topbar">
+      <div class="gate-brand"><span class="gate-brand-mark" aria-hidden="true"></span>Pii-chan Future Museum</div>
+      <a class="home-link" href="index.html">← HOME</a>
+    </header>
+
+    <section class="gate-stage tester-layout">
+      <div class="tester-heading">
+        <div>
+          <span class="eyebrow">VRChat-like playback check</span>
+          <h1><span class="gradient-title">Player Test</span><br>再生確認</h1>
+        </div>
+        <p class="tester-copy">変換済みURLをブラウザで再生し、映像・音声・エラーを確認します。Live / Stream向けHLSにも対応しています。</p>
+      </div>
+
+      <section class="glass-card control-card" aria-label="再生URL入力">
+        <label for="playback-url">VRChat用に変換したURL</label>
+        <div class="input-row">
+          <input class="museum-field url-field" id="playback-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://video.piloton.cc/stream?url=...">
+          <button class="test-button" id="start-button" type="button">再生テスト</button>
+          <button class="test-button secondary" id="clear-button" type="button" disabled>停止・クリア</button>
+        </div>
+        <p class="input-message" id="input-message" role="status" aria-live="polite">URLを貼り付けて「再生テスト」を押してください。音量100%・ミュート解除で開始します。</p>
+      </section>
+
+      <section class="glass-card player-card" aria-label="VRChat風プレビュー">
+        <div class="player-frame">
+          <video id="video-player" controls playsinline preload="metadata"></video>
+          <div class="player-overlay" id="player-overlay">
+            <div>
+              <span class="overlay-mark" aria-hidden="true">▶</span>
+              <h2 class="overlay-title" id="overlay-title">URLを入力してください</h2>
+              <p class="overlay-copy" id="overlay-copy">変換URLがブラウザまで届くかを確認できます。</p>
+            </div>
+          </div>
+        </div>
+        <div class="status-strip" aria-label="再生状態">
+          <span class="status-chip" id="connection-status">接続待ち</span>
+          <span class="status-chip" id="video-status">映像 未確認</span>
+          <span class="status-chip" id="audio-status">音声 未確認</span>
+          <span class="status-chip" id="mode-status">方式 自動</span>
+        </div>
+      </section>
+
+      <section class="glass-card diagnostic-card" aria-label="再生診断">
+        <div class="diagnostic-grid">
+          <div class="diagnostic-item"><span class="panel-label">Resolution</span><span class="diagnostic-value" id="resolution-value">—</span></div>
+          <div class="diagnostic-item"><span class="panel-label">Playback</span><span class="diagnostic-value" id="time-value">00:00</span></div>
+          <div class="diagnostic-item"><span class="panel-label">Volume</span><span class="diagnostic-value" id="volume-value">100% / ON</span></div>
+          <div class="diagnostic-item"><span class="panel-label">Last event</span><span class="diagnostic-value" id="event-value">待機中</span></div>
+        </div>
+        <div class="diagnostic-footer">
+          <p class="event-message" id="detail-message">再生を開始すると診断結果が表示されます。</p>
+          <button class="test-button secondary" id="copy-result-button" type="button" disabled>診断結果をコピー</button>
+        </div>
+      </section>
+
+      <aside class="caution">
+        このページはVRChat風の一次確認用です。ブラウザとVRChatのAVPro Videoは別の再生機能なので、ここで再生できてもVRChatでの完全な動作を保証するものではありません。VRChatではAllow Untrusted URLsを有効にし、配信URLはLive / Streamモードで試してください。
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const playbackInput = document.getElementById('playback-url');
+    const startButton = document.getElementById('start-button');
+    const clearButton = document.getElementById('clear-button');
+    const copyResultButton = document.getElementById('copy-result-button');
+    const inputMessage = document.getElementById('input-message');
+    const video = document.getElementById('video-player');
+    const overlay = document.getElementById('player-overlay');
+    const overlayTitle = document.getElementById('overlay-title');
+    const overlayCopy = document.getElementById('overlay-copy');
+    const connectionStatus = document.getElementById('connection-status');
+    const videoStatus = document.getElementById('video-status');
+    const audioStatus = document.getElementById('audio-status');
+    const modeStatus = document.getElementById('mode-status');
+    const resolutionValue = document.getElementById('resolution-value');
+    const timeValue = document.getElementById('time-value');
+    const volumeValue = document.getElementById('volume-value');
+    const eventValue = document.getElementById('event-value');
+    const detailMessage = document.getElementById('detail-message');
+
+    let hls = null;
+    let currentMode = '未開始';
+    let lastError = '';
+    let audioTimer = null;
+
+    const setChip = (element, text, state = '') => {
+      element.textContent = text;
+      element.className = `status-chip${state ? ` ${state}` : ''}`;
+    };
+
+    const formatTime = (seconds) => {
+      if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
+      const minutes = Math.floor(seconds / 60);
+      const remaining = Math.floor(seconds % 60);
+      return `${String(minutes).padStart(2, '0')}:${String(remaining).padStart(2, '0')}`;
+    };
+
+    const readableMediaError = (error) => {
+      if (!error) return '原因不明の再生エラーです。';
+      const messages = {
+        1: '再生が中断されました。',
+        2: '動画データを取得できませんでした。',
+        3: '映像または音声をデコードできませんでした。',
+        4: 'このブラウザが対応していない形式です。'
+      };
+      return messages[error.code] || '原因不明の再生エラーです。';
+    };
+
+    const getSourceUrl = (convertedUrl) => {
+      try {
+        const parsed = new URL(convertedUrl);
+        if (parsed.hostname === 'video.piloton.cc') {
+          const source = parsed.searchParams.get('url');
+          if (source) return new URL(source);
+        }
+        return parsed;
+      } catch {
+        return null;
+      }
+    };
+
+    const isHlsPlayback = (convertedUrl) => {
+      const source = getSourceUrl(convertedUrl);
+      if (!source) return false;
+      const host = source.hostname.toLowerCase();
+      return /\.m3u8$/i.test(source.pathname)
+        || host === 'tver.jp'
+        || host.endsWith('.tver.jp')
+        || host === 'abema.tv'
+        || host.endsWith('.abema.tv');
+    };
+
+    const teardown = () => {
+      if (audioTimer) {
+        window.clearInterval(audioTimer);
+        audioTimer = null;
+      }
+      if (hls) {
+        hls.destroy();
+        hls = null;
+      }
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    };
+
+    const showError = (message) => {
+      lastError = message;
+      overlay.hidden = false;
+      overlayTitle.textContent = 'Player Error';
+      overlayCopy.textContent = message;
+      setChip(connectionStatus, '接続 エラー', 'bad');
+      eventValue.textContent = 'error';
+      detailMessage.textContent = message;
+      inputMessage.textContent = message;
+      inputMessage.className = 'input-message error';
+      copyResultButton.disabled = false;
+    };
+
+    const updateAudioStatus = () => {
+      const decoded = Number(video.webkitAudioDecodedByteCount || 0);
+      const browserTracks = video.audioTracks ? video.audioTracks.length : 0;
+      const hlsTracks = hls ? hls.audioTracks.length : 0;
+      if (decoded > 0) {
+        setChip(audioStatus, '音声 デコード中', 'good');
+        return;
+      }
+      if (browserTracks > 0 || hlsTracks > 0) {
+        setChip(audioStatus, '音声トラックあり', 'good');
+        return;
+      }
+      if (video.currentTime > 2) {
+        setChip(audioStatus, '音声 耳で確認', 'warn');
+      }
+    };
+
+    const beginPlayback = async () => {
+      const value = playbackInput.value.trim();
+      let parsed;
+      try {
+        parsed = new URL(value);
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+        inputMessage.textContent = 'HTTPSで始まる正しい変換URLを入力してください。';
+        inputMessage.className = 'input-message error';
+        return;
+      }
+
+      teardown();
+      lastError = '';
+      overlay.hidden = false;
+      overlayTitle.textContent = '接続しています…';
+      overlayCopy.textContent = '初回は変換処理のため少し時間がかかる場合があります。';
+      setChip(connectionStatus, '接続中', 'warn');
+      setChip(videoStatus, '映像 読み込み中', 'warn');
+      setChip(audioStatus, '音声 確認中', 'warn');
+      resolutionValue.textContent = '—';
+      timeValue.textContent = '00:00';
+      eventValue.textContent = 'loadstart';
+      detailMessage.textContent = '変換先へ接続しています。';
+      inputMessage.textContent = '再生データを読み込んでいます…';
+      inputMessage.className = 'input-message';
+      clearButton.disabled = false;
+      copyResultButton.disabled = false;
+      video.muted = false;
+      video.volume = 1;
+
+      const useHls = isHlsPlayback(value);
+      if (useHls && video.canPlayType('application/vnd.apple.mpegurl')) {
+        currentMode = 'HLS（ブラウザ標準）';
+        setChip(modeStatus, '方式 HLS', 'good');
+        video.src = value;
+        video.load();
+      } else if (useHls) {
+        if (!window.Hls || !window.Hls.isSupported()) {
+          showError('このブラウザではHLSを再生できません。ChromeまたはEdgeの最新版で試してください。');
+          return;
+        }
+        currentMode = 'HLS.js';
+        setChip(modeStatus, '方式 HLS.js', 'good');
+        hls = new window.Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30,
+          maxBufferLength: 30
+        });
+        hls.on(window.Hls.Events.ERROR, (_event, data) => {
+          eventValue.textContent = `hls:${data.details || data.type}`;
+          if (!data.fatal) return;
+          if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+            detailMessage.textContent = '一度だけ映像・音声の復旧を試しています。';
+            hls.recoverMediaError();
+            return;
+          }
+          showError(`HLSの再生に失敗しました：${data.details || data.type}`);
+        });
+        hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+          eventValue.textContent = 'manifest parsed';
+          updateAudioStatus();
+          video.play().catch(() => {
+            overlay.hidden = false;
+            overlayTitle.textContent = '再生ボタンを押してください';
+            overlayCopy.textContent = 'ブラウザの自動再生制限により手動操作が必要です。';
+          });
+        });
+        hls.loadSource(value);
+        hls.attachMedia(video);
+      } else {
+        currentMode = 'HTML5 Video';
+        setChip(modeStatus, '方式 通常動画', 'good');
+        video.src = value;
+        video.load();
+      }
+
+      audioTimer = window.setInterval(updateAudioStatus, 500);
+      if (!useHls || video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.play().catch(() => {
+          overlay.hidden = false;
+          overlayTitle.textContent = '再生ボタンを押してください';
+          overlayCopy.textContent = 'ブラウザの自動再生制限により手動操作が必要です。';
+        });
+      }
+    };
+
+    const clearPlayer = () => {
+      teardown();
+      playbackInput.value = '';
+      currentMode = '未開始';
+      lastError = '';
+      overlay.hidden = false;
+      overlayTitle.textContent = 'URLを入力してください';
+      overlayCopy.textContent = '変換URLがブラウザまで届くかを確認できます。';
+      setChip(connectionStatus, '接続待ち');
+      setChip(videoStatus, '映像 未確認');
+      setChip(audioStatus, '音声 未確認');
+      setChip(modeStatus, '方式 自動');
+      resolutionValue.textContent = '—';
+      timeValue.textContent = '00:00';
+      volumeValue.textContent = '100% / ON';
+      eventValue.textContent = '待機中';
+      detailMessage.textContent = '再生を開始すると診断結果が表示されます。';
+      inputMessage.textContent = 'URLを貼り付けて「再生テスト」を押してください。音量100%・ミュート解除で開始します。';
+      inputMessage.className = 'input-message';
+      clearButton.disabled = true;
+      copyResultButton.disabled = true;
+      playbackInput.focus();
+      window.history.replaceState({}, '', window.location.pathname);
+    };
+
+    const diagnosticText = () => [
+      'VRChat風 Player Test',
+      `URL: ${playbackInput.value.trim() || '未入力'}`,
+      `方式: ${currentMode}`,
+      `映像: ${video.videoWidth && video.videoHeight ? `${video.videoWidth}x${video.videoHeight}` : '未確認'}`,
+      `再生位置: ${formatTime(video.currentTime)}`,
+      `音量: ${video.muted ? 'MUTE' : `${Math.round(video.volume * 100)}%`}`,
+      `状態: ${eventValue.textContent}`,
+      `音声: ${audioStatus.textContent}`,
+      `エラー: ${lastError || 'なし'}`
+    ].join('\n');
+
+    video.addEventListener('loadstart', () => { eventValue.textContent = 'loadstart'; });
+    video.addEventListener('loadedmetadata', () => {
+      eventValue.textContent = 'loadedmetadata';
+      resolutionValue.textContent = video.videoWidth && video.videoHeight ? `${video.videoWidth} × ${video.videoHeight}` : '音声のみ / 不明';
+      setChip(connectionStatus, '接続 完了', 'good');
+      detailMessage.textContent = 'メディア情報を取得しました。再生開始を待っています。';
+    });
+    video.addEventListener('loadeddata', () => {
+      eventValue.textContent = 'loadeddata';
+      if (video.videoWidth > 0) setChip(videoStatus, '映像 取得済み', 'good');
+      updateAudioStatus();
+    });
+    video.addEventListener('playing', () => {
+      overlay.hidden = true;
+      eventValue.textContent = 'playing';
+      setChip(connectionStatus, '再生中', 'good');
+      if (video.videoWidth > 0) setChip(videoStatus, '映像 再生中', 'good');
+      inputMessage.textContent = '再生できています。映像と実際の音を確認してください。';
+      inputMessage.className = 'input-message success';
+      detailMessage.textContent = 'ブラウザで再生中です。音が聞こえるか耳でも確認してください。';
+    });
+    video.addEventListener('waiting', () => {
+      eventValue.textContent = 'waiting';
+      setChip(connectionStatus, 'バッファ中', 'warn');
+      detailMessage.textContent = '次のデータを待っています。長く続く場合は配信側の応答を確認してください。';
+    });
+    video.addEventListener('stalled', () => {
+      eventValue.textContent = 'stalled';
+      setChip(connectionStatus, '読み込み停滞', 'warn');
+      detailMessage.textContent = 'データの読み込みが一時停止しています。';
+    });
+    video.addEventListener('timeupdate', () => {
+      timeValue.textContent = formatTime(video.currentTime);
+      updateAudioStatus();
+    });
+    video.addEventListener('volumechange', () => {
+      volumeValue.textContent = video.muted ? 'MUTED' : `${Math.round(video.volume * 100)}% / ON`;
+    });
+    video.addEventListener('error', () => showError(readableMediaError(video.error)));
+
+    playbackInput.addEventListener('input', () => {
+      clearButton.disabled = playbackInput.value.length === 0;
+    });
+    playbackInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') beginPlayback();
+    });
+    startButton.addEventListener('click', beginPlayback);
+    clearButton.addEventListener('click', clearPlayer);
+    copyResultButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(diagnosticText());
+        detailMessage.textContent = '診断結果をコピーしました。';
+      } catch {
+        detailMessage.textContent = '診断結果をコピーできませんでした。';
+      }
+    });
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const supplied = new URLSearchParams(window.location.search).get('url');
+      if (!supplied) return;
+      try {
+        const parsed = new URL(supplied);
+        if (parsed.protocol !== 'https:') return;
+        playbackInput.value = parsed.href;
+        clearButton.disabled = false;
+        inputMessage.textContent = '変換ページからURLを受け取りました。「再生テスト」を押してください。';
+        inputMessage.className = 'input-message success';
+      } catch {
+        // Ignore malformed query values.
+      }
+    });
+  </script>
+</body>
+</html>

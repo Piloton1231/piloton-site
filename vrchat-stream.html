@@ -298,14 +298,14 @@
             <input class="museum-field url-field" id="result-url" type="text" readonly>
             <button class="action-button" id="copy-button" type="button">コピー</button>
           </div>
-          <a class="open-link" id="open-link" href="#" target="_blank" rel="noopener noreferrer">ブラウザで動作を確認 ↗</a>
+          <a class="open-link" id="open-link" href="#">確認用プレイヤーで開く →</a>
           <p class="message success" id="result-message" role="status" aria-live="polite">リンクを作成しました。VRChatではLiveモード（Streamモード）で再生してください。</p>
         </section>
       </section>
 
       <section class="glass-card support-card" aria-label="対応サイト">
         <h2>対応サイト</h2>
-        <p class="support-copy">すべて <code>video.piloton.cc</code> のリンクに変換します。ニコニコ動画はPiloton側でHLSを生成・中継し、その他は直接メディアURLまたはVRChat向けに整理したHLSを返します。</p>
+        <p class="support-copy">すべて <code>video.piloton.cc</code> のリンクに変換します。ニコニコ動画はPiloton側で映像と音声を1本に結合し、その他は直接メディアURLまたはVRChat向けに整理したHLSを返します。</p>
         <div class="site-tags" aria-label="対応サービス一覧">
           <span class="site-tag">ニコニコ動画</span>
           <span class="site-tag">X / Twitter</span>
@@ -321,6 +321,7 @@
         </div>
         <div class="quick-links">
           <a class="home-link" href="vrchat-youtube.html">YouTube変換はこちら</a>
+          <a class="home-link" href="vrchat-player-test.html">確認用プレイヤー</a>
         </div>
       </section>
 
@@ -429,7 +430,7 @@
 
       serviceName.textContent = converted.service;
       resultUrl.value = converted.url;
-      openLink.href = converted.url;
+      openLink.href = `vrchat-player-test.html?url=${encodeURIComponent(converted.url)}`;
       resultMessage.textContent = 'リンクを作成しました。VRChatではLiveモード（Streamモード）で再生してください。';
       resultMessage.className = 'message success';
       inputMessage.textContent = `${converted.service}用のリンクを作成しました。`;
