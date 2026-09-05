@@ -14,7 +14,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
-from urllib.request import HTTPCookieProcessor, Request as UrlRequest, build_opener, urlopen
+from urllib.request import HTTPCookieProcessor, ProxyHandler, Request as UrlRequest, build_opener, urlopen
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -159,6 +159,22 @@ ABEMA_KEY_PROXY_BASE_URL = "https://video.piloton.cc/stream/key.bin?token="
 ABEMA_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/abema/media"
 TVER_MASTER_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/master.m3u8?token="
 TVER_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/media"
+TIKTOK_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tiktok/media.mp4?token="
+TIKTOK_MEDIA_HOST_ROOTS = (
+    "tiktok.com",
+    "tiktokcdn.com",
+    "tiktokv.com",
+    "byteoversea.com",
+)
+TIKTOK_FORMAT_SELECTOR = os.getenv(
+    "TIKTOK_FORMAT_SELECTOR",
+    "best[ext=mp4][vcodec^=h264][acodec!=none][height<=?1280]/"
+    "best[ext=mp4][vcodec^=h264][acodec!=none]/download",
+)
+TIKTOK_MEDIA_CHUNK_BYTES = max(
+    1_000_000,
+    min(4_000_000, int(os.getenv("TIKTOK_MEDIA_CHUNK_BYTES", "4000000"))),
+)
 STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~-]{16,256}")
 
 _cache: dict[str, tuple[float, str]] = {}
@@ -800,13 +816,195 @@ def _select_soundcloud_progressive(info: dict) -> str | None:
     return _validate_direct_media_url(selected["url"])
 
 
+def _validate_tiktok_media_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if not any(_host_matches(host, root) for root in TIKTOK_MEDIA_HOST_ROOTS):
+        raise ValueError("Unexpected TikTok media host")
+    return value
+
+
+def _validate_tiktok_source_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if not _host_matches(host, "tiktok.com"):
+        raise ValueError("Unexpected TikTok source host")
+    return value
+
+
+def _select_tiktok_progressive(info: dict) -> str | None:
+    candidates = []
+    for stream_format in info.get("formats", []):
+        if not isinstance(stream_format, dict):
+            continue
+        format_url = stream_format.get("url")
+        if not isinstance(format_url, str) or urlsplit(format_url).scheme != "https":
+            continue
+        vcodec = str(stream_format.get("vcodec") or "").lower()
+        if not vcodec.startswith(("h264", "avc")):
+            continue
+        if stream_format.get("acodec") == "none" or stream_format.get("ext") != "mp4":
+            continue
+        candidates.append(stream_format)
+    if not candidates:
+        return None
+
+    def score(stream_format: dict) -> tuple[int, int, int, float]:
+        width = stream_format.get("width")
+        height = stream_format.get("height")
+        width = int(width) if isinstance(width, (int, float)) else 0
+        height = int(height) if isinstance(height, (int, float)) else 0
+        long_edge = max(width, height)
+        pixels = width * height
+        return (
+            int(0 < long_edge <= 1280),
+            int(str(stream_format.get("format_note") or "").lower() != "watermarked"),
+            pixels,
+            float(stream_format.get("tbr") or 0),
+        )
+
+    selected = max(candidates, key=score)
+    return _validate_tiktok_media_url(selected["url"])
+
+
+def _tiktok_cookie_header(cookie_jar: http.cookiejar.CookieJar) -> str:
+    pairs = []
+    for cookie in cookie_jar:
+        domain = cookie.domain.lower().lstrip(".").rstrip(".")
+        if not _host_matches(domain, "tiktok.com"):
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", cookie.name):
+            continue
+        if not isinstance(cookie.value, str) or any(ord(char) < 0x21 for char in cookie.value):
+            continue
+        pairs.append(f"{cookie.name}={cookie.value}")
+    header = "; ".join(pairs)
+    if len(header) > 4096:
+        raise ValueError("TikTok cookies are too large")
+    return header
+
+
+def _encode_tiktok_media_token(upstream_url: str, source_url: str, cookie_header: str) -> str:
+    if len(cookie_header) > 4096 or "\r" in cookie_header or "\n" in cookie_header:
+        raise ValueError("Invalid TikTok cookies")
+    payload = json.dumps(
+        [
+            _validate_tiktok_media_url(upstream_url),
+            _validate_tiktok_source_url(source_url),
+            cookie_header,
+            int(time.time()) + STREAM_TOKEN_SECONDS,
+        ],
+        separators=(",", ":"),
+    ).encode()
+    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+
+
+def _decode_tiktok_media_token(token: str) -> tuple[str, str, str]:
+    if len(token) > 6000 or not token.startswith("z"):
+        raise HTTPException(status_code=400, detail="Invalid TikTok media token")
+    try:
+        encoded = token[1:]
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + padding)))
+    except (ValueError, TypeError, json.JSONDecodeError, zlib.error) as error:
+        raise HTTPException(status_code=400, detail="Invalid TikTok media token") from error
+    if not isinstance(payload, list) or len(payload) != 4:
+        raise HTTPException(status_code=400, detail="Invalid TikTok media token")
+    upstream_url, source_url, cookie_header, expires_at = payload
+    if (
+        not isinstance(upstream_url, str)
+        or not isinstance(source_url, str)
+        or not isinstance(cookie_header, str)
+        or len(cookie_header) > 4096
+        or "\r" in cookie_header
+        or "\n" in cookie_header
+        or not isinstance(expires_at, int)
+        or expires_at < int(time.time())
+        or expires_at > int(time.time()) + 3600
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid TikTok media token")
+    try:
+        return (
+            _validate_tiktok_media_url(upstream_url),
+            _validate_tiktok_source_url(source_url),
+            cookie_header,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid TikTok media target") from error
+
+
+def _tiktok_proxy_url(upstream_url: str, source_url: str, cookie_header: str) -> str:
+    token = _encode_tiktok_media_token(upstream_url, source_url, cookie_header)
+    return f"{TIKTOK_MEDIA_PROXY_BASE_URL}{quote(token, safe='')}"
+
+
+def _bounded_tiktok_range(range_header: str | None) -> str:
+    if range_header:
+        suffix_match = re.fullmatch(r"bytes=-(\d+)", range_header)
+        if suffix_match:
+            length = min(int(suffix_match.group(1)), TIKTOK_MEDIA_CHUNK_BYTES)
+            if length > 0:
+                return f"bytes=-{length}"
+        range_match = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header)
+        if range_match:
+            start = int(range_match.group(1))
+            requested_end = int(range_match.group(2)) if range_match.group(2) else None
+            maximum_end = start + TIKTOK_MEDIA_CHUNK_BYTES - 1
+            end = min(requested_end, maximum_end) if requested_end is not None else maximum_end
+            if end >= start:
+                return f"bytes={start}-{end}"
+    return f"bytes=0-{TIKTOK_MEDIA_CHUNK_BYTES - 1}"
+
+
+def _read_tiktok_resource(
+    upstream_url: str,
+    source_url: str,
+    cookie_header: str,
+    range_header: str | None = None,
+) -> tuple[bytes, int, str, dict[str, str]]:
+    request_headers = {
+        "Accept": "*/*",
+        "Referer": _validate_tiktok_source_url(source_url),
+        "User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"],
+        "Range": _bounded_tiktok_range(range_header),
+    }
+    if cookie_header:
+        request_headers["Cookie"] = cookie_header
+    request = UrlRequest(
+        _validate_tiktok_media_url(upstream_url),
+        headers=request_headers,
+        method="GET",
+    )
+    opener = (
+        build_opener(ProxyHandler({"http": YOUTUBE_PROXY_URL, "https": YOUTUBE_PROXY_URL}))
+        if YOUTUBE_PROXY_URL
+        else build_opener()
+    )
+    with opener.open(request, timeout=25) as response:
+        _validate_tiktok_media_url(response.geturl())
+        content_type = response.headers.get("Content-Type", "video/mp4")
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > TIKTOK_MEDIA_CHUNK_BYTES:
+            raise ValueError("TikTok media response is too large")
+        body = response.read(TIKTOK_MEDIA_CHUNK_BYTES + 1)
+        if len(body) > TIKTOK_MEDIA_CHUNK_BYTES:
+            raise ValueError("TikTok media response is too large")
+        forwarded_headers = {
+            name: response.headers[name]
+            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+            if response.headers.get(name)
+        }
+        return body, response.status, content_type, forwarded_headers
+
+
 def _extract_stream_media(value: str) -> tuple[str, str]:
     source_host = (urlsplit(value).hostname or "").lower().rstrip(".")
     is_soundcloud = _host_matches(source_host, "soundcloud.com")
     is_abema = _host_matches(source_host, "abema.tv")
     is_tver = _host_matches(source_host, "tver.jp")
+    is_tiktok = _host_matches(source_host, "tiktok.com")
     options = {
-        "format": STREAM_FORMAT_SELECTOR,
+        "format": TIKTOK_FORMAT_SELECTOR if is_tiktok else STREAM_FORMAT_SELECTOR,
         "noplaylist": True,
         "skip_download": True,
         "quiet": True,
@@ -824,24 +1022,40 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
                 "extract_flat": "discard_in_playlist",
             }
         )
+    if is_tiktok and YOUTUBE_PROXY_URL:
+        options["proxy"] = YOUTUBE_PROXY_URL
     if JS_RUNTIME:
         runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
         options["js_runtimes"] = {JS_RUNTIME: runtime_options}
 
-    with YoutubeDL(options) as downloader:
-        if is_abema:
-            AbemaTVBaseIE._MEDIATOKEN = None
-            abema_extractor = downloader.get_info_extractor("AbemaTV")
-            downloader._request_director.add_handler(
-                AbemaLicenseRH(ie=abema_extractor, logger=None)
-            )
-        info = downloader.extract_info(value, download=False)
-        if isinstance(info, dict) and info.get("extractor_key") == "AbemaTV":
-            return "abema-manifest", _create_abema_manifest(downloader, info)
+    tiktok_cookie_header = ""
+    extract_attempts = 3 if is_tiktok else 1
+    for extract_attempt in range(extract_attempts):
+        try:
+            with YoutubeDL(options) as downloader:
+                if is_abema:
+                    AbemaTVBaseIE._MEDIATOKEN = None
+                    abema_extractor = downloader.get_info_extractor("AbemaTV")
+                    downloader._request_director.add_handler(
+                        AbemaLicenseRH(ie=abema_extractor, logger=None)
+                    )
+                info = downloader.extract_info(value, download=False)
+                if is_tiktok:
+                    tiktok_cookie_header = _tiktok_cookie_header(downloader.cookiejar)
+                if isinstance(info, dict) and info.get("extractor_key") == "AbemaTV":
+                    return "abema-manifest", _create_abema_manifest(downloader, info)
+            break
+        except DownloadError:
+            if extract_attempt + 1 >= extract_attempts:
+                raise
 
     direct_url = info.get("url") if isinstance(info, dict) else None
     if not isinstance(info, dict):
         raise ValueError("No stream information was returned")
+    if is_tiktok:
+        progressive_url = _select_tiktok_progressive(info)
+        if progressive_url:
+            return "redirect", _tiktok_proxy_url(progressive_url, value, tiktok_cookie_header)
     if is_soundcloud and info.get("entries") is not None:
         raise StreamCompatibilityError("SoundCloud profiles and playlists are not supported")
     if str(info.get("extractor_key", "")).lower() == "soundcloud":
@@ -1723,6 +1937,42 @@ async def proxy_tver_media_with_extension(
     if not re.fullmatch(r"[a-z0-9]{1,8}", extension):
         raise HTTPException(status_code=404, detail="Unsupported TVer stream extension")
     return await _proxy_tver_media_response(request, token)
+
+
+@app.get("/stream/tiktok/media.mp4")
+async def proxy_tiktok_media(
+    request: Request,
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    upstream_url, source_url, cookie_header = _decode_tiktok_media_token(token)
+    try:
+        body, status_code, content_type, upstream_headers = await asyncio.to_thread(
+            _read_tiktok_resource,
+            upstream_url,
+            source_url,
+            cookie_header,
+            request.headers.get("range"),
+        )
+    except HTTPError as error:
+        print(f"TikTok media returned HTTP {error.code}", file=sys.stderr, flush=True)
+        status = 416 if error.code == 416 else 410 if error.code in {401, 403, 404} else 502
+        raise HTTPException(status_code=status, detail="The TikTok stream has expired") from error
+    except (URLError, TimeoutError, ValueError, OSError) as error:
+        print(f"TikTok media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not read the TikTok stream") from error
+
+    return Response(
+        content=body,
+        status_code=status_code,
+        headers={
+            **upstream_headers,
+            "Accept-Ranges": upstream_headers.get("Accept-Ranges", "bytes"),
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            "Content-Type": content_type if content_type.startswith("video/") else "video/mp4",
+            "X-Resolver-Path": "original-tiktok-media",
+        },
+    )
 
 
 async def _proxy_niconico_media_response(
