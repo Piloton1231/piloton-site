@@ -1716,11 +1716,7 @@ def _read_pornhub_resource(
         },
         method="GET",
     )
-    opener = (
-        build_opener(ProxyHandler({"http": YOUTUBE_PROXY_URL, "https": YOUTUBE_PROXY_URL}))
-        if YOUTUBE_PROXY_URL
-        else build_opener()
-    )
+    opener = build_opener()
     with opener.open(request, timeout=25) as response:
         _validate_pornhub_media_url(response.geturl())
         content_type = response.headers.get("Content-Type", "video/mp4")
@@ -1778,7 +1774,7 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
                 "extract_flat": "discard_in_playlist",
             }
         )
-    if (is_rule34video or is_rule34xxx or is_pornhub) and YOUTUBE_PROXY_URL:
+    if (is_rule34video or is_rule34xxx) and YOUTUBE_PROXY_URL:
         options["proxy"] = YOUTUBE_PROXY_URL
     if JS_RUNTIME:
         runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
