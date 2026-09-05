@@ -154,7 +154,7 @@ STREAM_MANIFEST_MAX_BYTES = max(
 STREAM_MEDIA_MAX_BYTES = max(
     1_000_000, min(32_000_000, int(os.getenv("STREAM_MEDIA_MAX_BYTES", "12000000")))
 )
-STREAM_PROXY_BASE_URL = "https://video.piloton.cc/stream/media"
+STREAM_PROXY_BASE_URL = "https://video.piloton.cc/stream/niconico"
 ABEMA_KEY_PROXY_BASE_URL = "https://video.piloton.cc/stream/key.bin?token="
 ABEMA_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/abema/media"
 TVER_MASTER_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/master.m3u8?token="
@@ -450,6 +450,9 @@ def _normalize_hls_audio_rendition(line: str) -> str:
         return line
     line = _replace_hls_attribute(line, "DEFAULT", "YES", quoted=False)
     line = _replace_hls_attribute(line, "AUTOSELECT", "YES", quoted=False)
+    line = _replace_hls_attribute(line, "FORCED", "NO", quoted=False)
+    if not attributes.get("LANGUAGE"):
+        line = _replace_hls_attribute(line, "LANGUAGE", "ja")
     if not attributes.get("CHANNELS"):
         line = _replace_hls_attribute(line, "CHANNELS", "2")
     return line
@@ -1172,15 +1175,24 @@ def _decode_stream_token(token: str) -> tuple[str, str]:
 
 def _proxy_stream_url(upstream_url: str, domand_cookie: str) -> str:
     token = _encode_stream_token(upstream_url, domand_cookie)
-    extension = Path(urlsplit(upstream_url).path).suffix.lower()
-    # NicoNico's HLS uses fragmented MP4 files named .cmfv/.cmfa. AVPro in
-    # VRChat may reject those vendor-specific extensions before inspecting the
-    # valid MP4 content type, so expose both through the conventional suffix.
-    if extension in {".cmfv", ".cmfa"}:
+    upstream_path = urlsplit(upstream_url).path.lower()
+    upstream_name = Path(upstream_path).name
+    if "/audio/" in upstream_path or upstream_name.startswith("audio-"):
+        track = "audio"
+    elif "/video/" in upstream_path or upstream_name.startswith("video-"):
+        track = "video"
+    else:
+        track = "media"
+    extension = Path(upstream_path).suffix.lower()
+    # NicoNico uses vendor-specific suffixes for fragmented MP4. Expose video
+    # as .mp4 and AAC audio as .m4a so AVPro can identify each track correctly.
+    if extension == ".cmfv":
         extension = ".mp4"
+    elif extension == ".cmfa":
+        extension = ".m4a"
     if not re.fullmatch(r"\.[a-z0-9]{1,8}", extension):
         extension = ".bin"
-    return f"{STREAM_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
+    return f"{STREAM_PROXY_BASE_URL}/{track}{extension}?token={quote(token, safe='')}"
 
 
 def _rewrite_hls_manifest(manifest: str, base_url: str, domand_cookie: str) -> str:
@@ -2013,6 +2025,20 @@ async def _proxy_niconico_media_response(
         status_code = 200
 
     return Response(content=body, status_code=status_code, headers=response_headers)
+
+
+@app.get("/stream/niconico/{track}.{extension}")
+async def proxy_named_niconico_media(
+    request: Request,
+    track: str,
+    extension: str,
+    token: str = Query(min_length=1, max_length=12000),
+) -> Response:
+    if track not in {"audio", "video", "media"} or not re.fullmatch(
+        r"[a-z0-9]{1,8}", extension
+    ):
+        raise HTTPException(status_code=404, detail="Unsupported stream resource")
+    return await _proxy_niconico_media_response(request, token)
 
 
 @app.get("/stream/media")

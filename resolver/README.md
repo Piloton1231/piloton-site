@@ -24,7 +24,7 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 
 - `GET /health` — 稼働確認
 - `GET /stream?url=<動画URL>` — ニコニコ動画は独自HLSを生成し、その他の対応サイトは直接メディアURLまたは整理済みHLSを返す
-- `GET /stream/media.<拡張子>?token=<一時トークン>` — ニコニコ動画のHLSプレイリスト、暗号鍵、動画・音声断片を元の拡張子付きで中継
+- `GET /stream/niconico/<audio|video>.<拡張子>?token=<一時トークン>` — ニコニコ動画のHLSプレイリスト、暗号鍵、動画・音声断片をトラック別に中継
 - `GET /stream/key.bin?token=<一時トークン>` — ABEMA HLS用の16バイト暗号鍵を期限付きで返却
 - `GET /stream/abema/media.<拡張子>?token=<一時トークン>` — ABEMAの動画・音声一体型HLS断片を動画ドメイン内で中継
 - `GET /stream/tver/master.m3u8?token=<一時トークン>` — TVerの720p映像と既定音声をVRChat向けHLSとして返却
