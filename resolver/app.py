@@ -126,6 +126,10 @@ INSTAGRAM_EMBED_HEADERS = {
     "Accept": "text/html,video/*,image/*;q=0.9,*/*;q=0.8",
 }
 STREAM_SOURCE_HOST_ROOTS = (
+    "dailymotion.com",
+    "pornhub.com",
+    "xnxx.com",
+    "rutube.ru",
     "x.com",
     "twitter.com",
     "tiktok.com",
@@ -170,6 +174,10 @@ STREAM_FORMAT_SELECTOR = os.getenv(
     "STREAM_FORMAT_SELECTOR",
     "bestvideo*+bestaudio/best",
 )
+COMPATIBLE_STREAM_FORMAT_SELECTOR = os.getenv(
+    "COMPATIBLE_STREAM_FORMAT_SELECTOR",
+    "best[height<=720]/best",
+)
 STREAM_EXTRACT_TIMEOUT_SECONDS = max(
     10, min(90, int(os.getenv("STREAM_EXTRACT_TIMEOUT_SECONDS", "35")))
 )
@@ -191,6 +199,7 @@ TIKTOK_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tiktok/media.mp4?
 RULE34VIDEO_MEDIA_PROXY_BASE_URL = (
     "https://video.piloton.cc/stream/rule34video/media.mp4?token="
 )
+PORNHUB_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/pornhub/media.mp4?token="
 TIKTOK_MEDIA_HOST_ROOTS = (
     "tiktok.com",
     "tiktokcdn.com",
@@ -201,10 +210,15 @@ RULE34VIDEO_MEDIA_HOST_ROOTS = (
     "rule34video.com",
     "boomio-cdn.com",
 )
+PORNHUB_MEDIA_HOST_ROOTS = ("phncdn.com",)
 TIKTOK_FORMAT_SELECTOR = os.getenv(
     "TIKTOK_FORMAT_SELECTOR",
     "best[ext=mp4][vcodec^=h264][acodec!=none][height<=?1280]/"
     "best[ext=mp4][vcodec^=h264][acodec!=none]/download",
+)
+PORNHUB_FORMAT_SELECTOR = os.getenv(
+    "PORNHUB_FORMAT_SELECTOR",
+    "best[protocol=https][ext=mp4][height<=720]/best[height<=720]/best",
 )
 TIKTOK_MEDIA_CHUNK_BYTES = max(
     1_000_000,
@@ -1638,16 +1652,115 @@ def _read_rule34video_resource(
         return body, response.status, content_type, forwarded_headers
 
 
+def _validate_pornhub_media_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if not any(_host_matches(host, root) for root in PORNHUB_MEDIA_HOST_ROOTS):
+        raise ValueError("Unexpected Pornhub media host")
+    return value
+
+
+def _encode_pornhub_media_token(upstream_url: str) -> str:
+    payload = json.dumps(
+        [
+            _validate_pornhub_media_url(upstream_url),
+            int(time.time()) + STREAM_TOKEN_SECONDS,
+        ],
+        separators=(",", ":"),
+    ).encode()
+    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+
+
+def _decode_pornhub_media_token(token: str) -> str:
+    if len(token) > 6000 or not token.startswith("z"):
+        raise HTTPException(status_code=400, detail="Invalid Pornhub media token")
+    try:
+        encoded = token[1:]
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + padding)))
+    except (ValueError, TypeError, json.JSONDecodeError, zlib.error) as error:
+        raise HTTPException(status_code=400, detail="Invalid Pornhub media token") from error
+    if not isinstance(payload, list) or len(payload) != 2:
+        raise HTTPException(status_code=400, detail="Invalid Pornhub media token")
+    upstream_url, expires_at = payload
+    if (
+        not isinstance(upstream_url, str)
+        or not isinstance(expires_at, int)
+        or expires_at < int(time.time())
+        or expires_at > int(time.time()) + 3600
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid Pornhub media token")
+    try:
+        return _validate_pornhub_media_url(upstream_url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid Pornhub media target") from error
+
+
+def _pornhub_proxy_url(upstream_url: str) -> str:
+    token = _encode_pornhub_media_token(upstream_url)
+    return f"{PORNHUB_MEDIA_PROXY_BASE_URL}{quote(token, safe='')}"
+
+
+def _read_pornhub_resource(
+    upstream_url: str,
+    range_header: str | None = None,
+) -> tuple[bytes, int, str, dict[str, str]]:
+    request = UrlRequest(
+        _validate_pornhub_media_url(upstream_url),
+        headers={
+            "Accept": "*/*",
+            "Origin": "https://www.pornhub.com",
+            "Referer": "https://www.pornhub.com/",
+            "User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"],
+            "Range": _bounded_tiktok_range(range_header),
+        },
+        method="GET",
+    )
+    opener = (
+        build_opener(ProxyHandler({"http": YOUTUBE_PROXY_URL, "https": YOUTUBE_PROXY_URL}))
+        if YOUTUBE_PROXY_URL
+        else build_opener()
+    )
+    with opener.open(request, timeout=25) as response:
+        _validate_pornhub_media_url(response.geturl())
+        content_type = response.headers.get("Content-Type", "video/mp4")
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > TIKTOK_MEDIA_CHUNK_BYTES:
+            raise ValueError("Pornhub media response is too large")
+        body = response.read(TIKTOK_MEDIA_CHUNK_BYTES + 1)
+        if len(body) > TIKTOK_MEDIA_CHUNK_BYTES:
+            raise ValueError("Pornhub media response is too large")
+        forwarded_headers = {
+            name: response.headers[name]
+            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+            if response.headers.get(name)
+        }
+        return body, response.status, content_type, forwarded_headers
+
+
 def _extract_stream_media(value: str) -> tuple[str, str]:
     source_host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    prefers_compatible_combined = any(
+        _host_matches(source_host, root)
+        for root in ("dailymotion.com", "pornhub.com", "xnxx.com", "rutube.ru")
+    )
     is_soundcloud = _host_matches(source_host, "soundcloud.com")
     is_abema = _host_matches(source_host, "abema.tv")
     is_tver = _host_matches(source_host, "tver.jp")
     is_tiktok = _host_matches(source_host, "tiktok.com")
+    is_pornhub = _host_matches(source_host, "pornhub.com")
     is_rule34video = _host_matches(source_host, "rule34video.com")
     is_rule34xxx = _host_matches(source_host, "rule34.xxx")
     options = {
-        "format": TIKTOK_FORMAT_SELECTOR if is_tiktok else STREAM_FORMAT_SELECTOR,
+        "format": (
+            TIKTOK_FORMAT_SELECTOR
+            if is_tiktok
+            else PORNHUB_FORMAT_SELECTOR
+            if is_pornhub
+            else COMPATIBLE_STREAM_FORMAT_SELECTOR
+            if prefers_compatible_combined
+            else STREAM_FORMAT_SELECTOR
+        ),
         "noplaylist": True,
         "skip_download": True,
         "quiet": True,
@@ -1665,7 +1778,7 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
                 "extract_flat": "discard_in_playlist",
             }
         )
-    if (is_rule34video or is_rule34xxx) and YOUTUBE_PROXY_URL:
+    if (is_rule34video or is_rule34xxx or is_pornhub) and YOUTUBE_PROXY_URL:
         options["proxy"] = YOUTUBE_PROXY_URL
     if JS_RUNTIME:
         runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
@@ -1719,6 +1832,8 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
     if isinstance(direct_url, str):
         if is_rule34video:
             return "redirect", _rule34video_proxy_url(direct_url, value)
+        if is_pornhub:
+            return "redirect", _pornhub_proxy_url(direct_url)
         return "redirect", _validate_direct_media_url(direct_url)
 
     formats = [stream_format for stream_format in info.get("formats", []) if isinstance(stream_format, dict)]
@@ -1738,6 +1853,8 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
         selected = max(progressive_formats, key=_stream_format_score)
         if is_rule34video:
             return "redirect", _rule34video_proxy_url(selected["url"], value)
+        if is_pornhub:
+            return "redirect", _pornhub_proxy_url(selected["url"])
         return "redirect", _validate_direct_media_url(selected["url"])
 
     manifest_url = next(
@@ -2809,6 +2926,40 @@ async def proxy_rule34video_media(
             "Cache-Control": "no-store",
             "Content-Type": content_type if content_type.startswith("video/") else "video/mp4",
             "X-Resolver-Path": "original-rule34video-media",
+        },
+    )
+
+
+@app.get("/stream/pornhub/media.mp4")
+async def proxy_pornhub_media(
+    request: Request,
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    upstream_url = _decode_pornhub_media_token(token)
+    try:
+        body, status_code, content_type, upstream_headers = await asyncio.to_thread(
+            _read_pornhub_resource,
+            upstream_url,
+            request.headers.get("range"),
+        )
+    except HTTPError as error:
+        print(f"Pornhub media returned HTTP {error.code}", file=sys.stderr, flush=True)
+        status = 416 if error.code == 416 else 410 if error.code in {401, 403, 404} else 502
+        raise HTTPException(status_code=status, detail="The Pornhub stream has expired") from error
+    except (URLError, TimeoutError, ValueError, OSError) as error:
+        print(f"Pornhub media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not read the Pornhub stream") from error
+
+    return Response(
+        content=body,
+        status_code=status_code,
+        headers={
+            **upstream_headers,
+            "Accept-Ranges": upstream_headers.get("Accept-Ranges", "bytes"),
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            "Content-Type": content_type if content_type.startswith("video/") else "video/mp4",
+            "X-Resolver-Path": "original-pornhub-media",
         },
     )
 

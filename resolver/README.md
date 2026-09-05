@@ -65,7 +65,7 @@ YouTube側の変更で抽出が動かなくなることがあります。`requir
 
 ## 制限と注意
 
-- Instagram、Rule34Video、Rule34.xxx、e621を含む公開URLに対応します。InstagramはKkinstagramを外部取得経路として使用します。
+- Instagram、Dailymotion、Rutube、Pornhub、XNXX、Rule34Video、Rule34.xxx、e621を含む公開URLに対応します。InstagramはKkinstagramを外部取得経路として使用します。
 - 非公開、メンバー限定、有料、年齢制限コンテンツには対応しません。
 - GoogleアカウントのCookieや認証情報を入れないでください。
 - Vercelなど共有クラウドのIPはYouTubeに拒否される場合があります。その場合、無料構成ではKsync予備経路を利用します。
