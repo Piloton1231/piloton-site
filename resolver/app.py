@@ -959,6 +959,11 @@ def _decode_stream_token(token: str) -> tuple[str, str]:
 def _proxy_stream_url(upstream_url: str, domand_cookie: str) -> str:
     token = _encode_stream_token(upstream_url, domand_cookie)
     extension = Path(urlsplit(upstream_url).path).suffix.lower()
+    # NicoNico's HLS uses fragmented MP4 files named .cmfv/.cmfa. AVPro in
+    # VRChat may reject those vendor-specific extensions before inspecting the
+    # valid MP4 content type, so expose both through the conventional suffix.
+    if extension in {".cmfv", ".cmfa"}:
+        extension = ".mp4"
     if not re.fullmatch(r"\.[a-z0-9]{1,8}", extension):
         extension = ".bin"
     return f"{STREAM_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
