@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html
 import http.cookiejar
 import ipaddress
 import itertools
@@ -412,6 +413,9 @@ def _validate_stream_source_url(value: str) -> tuple[str, str | None]:
             )
         return "instagram", None
 
+    if _host_matches(host, "rule34.xxx"):
+        return "rule34xxx", None
+
     if _host_matches(host, "soundcloud.com"):
         path_parts = [part for part in parsed.path.split("/") if part]
         if (
@@ -520,6 +524,60 @@ def _resolve_instagram_media(value: str) -> str:
         return final_url
 
     raise ValueError("Too many Instagram media redirects")
+
+
+def _resolve_rule34xxx_media(value: str) -> str:
+    parsed = urlsplit(value)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    query = parse_qs(parsed.query)
+    if (
+        not _host_matches(host, "rule34.xxx")
+        or query.get("page") != ["post"]
+        or query.get("s") != ["view"]
+        or not query.get("id", [""])[0].isdigit()
+    ):
+        raise ValueError("Invalid Rule34.xxx post URL")
+
+    request = UrlRequest(
+        value,
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"],
+        },
+        method="GET",
+    )
+    opener = (
+        build_opener(ProxyHandler({"http": YOUTUBE_PROXY_URL, "https": YOUTUBE_PROXY_URL}))
+        if YOUTUBE_PROXY_URL
+        else build_opener()
+    )
+    with opener.open(request, timeout=20) as response:
+        final_host = (urlsplit(response.geturl()).hostname or "").lower().rstrip(".")
+        if not _host_matches(final_host, "rule34.xxx"):
+            raise ValueError("Unexpected Rule34.xxx page redirect")
+        page = response.read(2_000_001)
+    if len(page) > 2_000_000:
+        raise ValueError("Rule34.xxx page is too large")
+    page_text = page.decode("utf-8", errors="replace")
+    media_match = re.search(
+        r'<source\b[^>]*\bsrc=["\']([^"\']+)["\'][^>]*\btype=["\']video/mp4["\']',
+        page_text,
+        re.IGNORECASE,
+    )
+    if not media_match:
+        media_match = re.search(
+            r'https://[^\s"\'<>]+\.(?:mp4|webm)(?:\?[^\s"\'<>]*)?',
+            page_text,
+            re.IGNORECASE,
+        )
+    if not media_match:
+        raise StreamCompatibilityError("The Rule34.xxx post did not provide a video")
+    media_url = html.unescape(media_match.group(1) if media_match.lastindex else media_match.group(0))
+    media_url = _validate_direct_media_url(media_url)
+    media_host = (urlsplit(media_url).hostname or "").lower().rstrip(".")
+    if not _host_matches(media_host, "rule34.xxx"):
+        raise ValueError("Unexpected Rule34.xxx media host")
+    return media_url
 
 
 def _hls_attributes(line: str) -> dict[str, str]:
@@ -2059,6 +2117,16 @@ async def resolve_stream(
                     headers={
                         "Cache-Control": "no-store",
                         "X-Resolver-Path": "instagram-kkinstagram",
+                    },
+                )
+            if route == "rule34xxx":
+                media_url = await asyncio.to_thread(_resolve_rule34xxx_media, url)
+                return RedirectResponse(
+                    media_url,
+                    status_code=307,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Resolver-Path": "original-rule34xxx",
                     },
                 )
             stream_kind, stream_content = await asyncio.wait_for(
