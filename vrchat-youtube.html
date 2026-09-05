@@ -469,7 +469,6 @@
       'youtu.be'
     ]);
     let resultEntries = [];
-    const resolverWarmups = new Map();
 
     const parseYouTubeUrl = (value) => {
       try {
@@ -512,21 +511,6 @@
       const ksyncResolverUrl = `${ksyncBaseUrl}${encodeURIComponent(sourceUrl)}`;
       const ksyncUrl = `${redirectorBaseUrl}${encodeURIComponent(ksyncResolverUrl)}`;
       return { sourceUrl, mainUrl, ksyncUrl };
-    };
-
-    const warmMainLink = (entry) => {
-      if (!entry || !entry.mainUrl) return Promise.resolve(false);
-      const existing = resolverWarmups.get(entry.mainUrl);
-      if (existing) return existing;
-
-      const warmup = fetch(entry.mainUrl, {
-        method: 'GET',
-        mode: 'cors',
-        cache: 'default',
-        redirect: 'manual'
-      }).then(() => true).catch(() => false);
-      resolverWarmups.set(entry.mainUrl, warmup);
-      return warmup;
     };
 
     const setBusy = (busy) => {
@@ -687,16 +671,8 @@
           throw error;
         }
         renderResults(await response.json());
-        const preferredEntry = resultEntries[0];
-        inputMessage.textContent = 'リンクを作成しました。先頭動画の再生準備中です…';
-        inputMessage.className = 'message';
-        const warmed = await warmMainLink(preferredEntry);
-        if (resultEntries[0]?.id === preferredEntry?.id) {
-          inputMessage.textContent = warmed
-            ? (parsed.playlistId ? 'プレイリストの変換と先頭動画の再生準備が完了しました。' : '動画の変換と再生準備が完了しました。')
-            : 'リンクを作成しました。初回再生時に準備が行われます。';
-          inputMessage.className = warmed ? 'message success' : 'message';
-        }
+        inputMessage.textContent = parsed.playlistId ? 'プレイリストの変換が完了しました。' : '動画の変換が完了しました。';
+        inputMessage.className = 'message success';
       } catch (error) {
         if (!parsed.playlistId && parsed.videoId) {
           renderResults({
@@ -733,11 +709,6 @@
       const message = document.getElementById(`card-message-${index}`);
       if (!entry || !message) return;
       const isBackup = button.dataset.action === 'copy-ksync';
-      if (!isBackup) {
-        message.textContent = '再生準備を確認しています…';
-        message.className = 'message card-message';
-        await warmMainLink(entry);
-      }
       await copyText(
         isBackup ? entry.ksyncUrl : entry.mainUrl,
         message,
@@ -747,11 +718,6 @@
 
     const copyAll = async (key, label) => {
       if (resultEntries.length === 0) return;
-      if (key === 'mainUrl') {
-        resultMessage.textContent = '先頭動画の再生準備を確認しています…';
-        resultMessage.className = 'message';
-        await warmMainLink(resultEntries[0]);
-      }
       const text = resultEntries.map((entry) => `${entry.title}\n${entry[key]}`).join('\n\n');
       await copyText(text, resultMessage, `${label}を${resultEntries.length}件まとめてコピーしました。`);
     };
@@ -766,10 +732,6 @@
     youtubeInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') createListing();
     });
-
-    window.addEventListener('load', () => {
-      fetch('https://video.piloton.cc/health', { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
-    }, { once: true });
   </script>
 </body>
 </html>

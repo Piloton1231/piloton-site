@@ -132,6 +132,29 @@
     .input-message.success { color: var(--green); }
     .input-message.error { color: #ff8faa; }
 
+    .conversion-result {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 11px;
+      align-items: end;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(61, 247, 255, 0.2);
+    }
+
+    .conversion-result label {
+      margin-bottom: 8px;
+      color: var(--green);
+      font-size: 13px;
+    }
+
+    .converted-field {
+      min-height: 48px;
+      padding: 0 14px;
+      color: var(--green);
+      font-size: 14px;
+    }
+
     .player-card {
       position: relative;
       overflow: hidden;
@@ -297,6 +320,7 @@
 
     @media (max-width: 640px) {
       .input-row,
+      .conversion-result,
       .diagnostic-grid { grid-template-columns: 1fr; }
       .test-button { width: 100%; }
       .tester-heading { align-items: start; }
@@ -318,17 +342,24 @@
           <span class="eyebrow">VRChat-like playback check</span>
           <h1><span class="gradient-title">Player Test</span><br>再生確認</h1>
         </div>
-        <p class="tester-copy">変換済みURLをブラウザで再生し、映像・音声・エラーを確認します。Live / Stream向けHLSにも対応しています。</p>
+        <p class="tester-copy">YouTube URLはPiloton用URLへ変換して再生します。変換済みURLやLive / Stream向けHLSもそのまま確認できます。</p>
       </div>
 
       <section class="glass-card control-card" aria-label="再生URL入力">
-        <label for="playback-url">VRChat用に変換したURL</label>
+        <label for="playback-url">YouTube URL または VRChat用URL</label>
         <div class="input-row">
-          <input class="museum-field url-field" id="playback-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://video.piloton.cc/stream?url=...">
-          <button class="test-button" id="start-button" type="button">再生テスト</button>
+          <input class="museum-field url-field" id="playback-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=...">
+          <button class="test-button" id="start-button" type="button">変換して再生</button>
           <button class="test-button secondary" id="clear-button" type="button" disabled>停止・クリア</button>
         </div>
-        <p class="input-message" id="input-message" role="status" aria-live="polite">URLを貼り付けて「再生テスト」を押してください。音量100%・ミュート解除で開始します。</p>
+        <p class="input-message" id="input-message" role="status" aria-live="polite">YouTubeまたは変換済みURLを貼り付けてください。音量100%・ミュート解除で開始します。</p>
+        <div class="conversion-result" id="conversion-result" hidden>
+          <div>
+            <label for="converted-url">変換後のVRChat用URL</label>
+            <input class="museum-field converted-field" id="converted-url" type="text" readonly>
+          </div>
+          <button class="test-button secondary" id="copy-url-button" type="button">URLをコピー</button>
+        </div>
       </section>
 
       <section class="glass-card player-card" aria-label="VRChat風プレビュー">
@@ -374,6 +405,9 @@
     const startButton = document.getElementById('start-button');
     const clearButton = document.getElementById('clear-button');
     const copyResultButton = document.getElementById('copy-result-button');
+    const copyUrlButton = document.getElementById('copy-url-button');
+    const conversionResult = document.getElementById('conversion-result');
+    const convertedUrl = document.getElementById('converted-url');
     const inputMessage = document.getElementById('input-message');
     const video = document.getElementById('video-player');
     const overlay = document.getElementById('player-overlay');
@@ -393,6 +427,15 @@
     let currentMode = '未開始';
     let lastError = '';
     let audioTimer = null;
+    let activePlaybackUrl = '';
+
+    const youtubeHosts = new Set([
+      'youtube.com',
+      'www.youtube.com',
+      'm.youtube.com',
+      'music.youtube.com',
+      'youtu.be'
+    ]);
 
     const setChip = (element, text, state = '') => {
       element.textContent = text;
@@ -415,6 +458,40 @@
         4: 'このブラウザが対応していない形式です。'
       };
       return messages[error.code] || '原因不明の再生エラーです。';
+    };
+
+    const normalizePlaybackUrl = (value) => {
+      let parsed;
+      try {
+        parsed = new URL(value);
+      } catch {
+        return { error: 'HTTPSで始まる正しいURLを入力してください。' };
+      }
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+        return { error: 'HTTPSで始まる正しいURLを入力してください。' };
+      }
+      if (!youtubeHosts.has(parsed.hostname.toLowerCase())) {
+        return { playbackUrl: parsed.href, converted: false };
+      }
+
+      const host = parsed.hostname.toLowerCase();
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      let videoId = null;
+      if (host === 'youtu.be' && parts.length === 1) {
+        videoId = parts[0];
+      } else if (parsed.pathname === '/watch') {
+        videoId = parsed.searchParams.get('v');
+      } else if (parts.length === 2 && ['shorts', 'live', 'embed'].includes(parts[0])) {
+        videoId = parts[1];
+      }
+      if (!videoId || !/^[a-z0-9_-]{11}$/i.test(videoId)) {
+        return { error: '単体のYouTube動画URLを入力してください。プレイリスト一覧はYouTube変換ページを使用してください。' };
+      }
+      const sourceUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      return {
+        playbackUrl: `https://video.piloton.cc/resolve?url=${encodeURIComponent(sourceUrl)}`,
+        converted: true
+      };
     };
 
     const getSourceUrl = (convertedUrl) => {
@@ -487,17 +564,17 @@
 
     const beginPlayback = async () => {
       const value = playbackInput.value.trim();
-      let parsed;
-      try {
-        parsed = new URL(value);
-      } catch {
-        parsed = null;
-      }
-      if (!parsed || parsed.protocol !== 'https:' || parsed.username || parsed.password) {
-        inputMessage.textContent = 'HTTPSで始まる正しい変換URLを入力してください。';
+      const normalized = normalizePlaybackUrl(value);
+      if (normalized.error) {
+        inputMessage.textContent = normalized.error;
         inputMessage.className = 'input-message error';
         return;
       }
+
+      const playbackUrl = normalized.playbackUrl;
+      activePlaybackUrl = playbackUrl;
+      convertedUrl.value = playbackUrl;
+      conversionResult.hidden = !normalized.converted;
 
       teardown();
       lastError = '';
@@ -518,11 +595,11 @@
       video.muted = false;
       video.volume = 1;
 
-      const useHls = isHlsPlayback(value);
+      const useHls = isHlsPlayback(playbackUrl);
       if (useHls && video.canPlayType('application/vnd.apple.mpegurl')) {
         currentMode = 'HLS（ブラウザ標準）';
         setChip(modeStatus, '方式 HLS', 'good');
-        video.src = value;
+        video.src = playbackUrl;
         video.load();
       } else if (useHls) {
         if (!window.Hls || !window.Hls.isSupported()) {
@@ -556,12 +633,12 @@
             overlayCopy.textContent = 'ブラウザの自動再生制限により手動操作が必要です。';
           });
         });
-        hls.loadSource(value);
+        hls.loadSource(playbackUrl);
         hls.attachMedia(video);
       } else {
         currentMode = 'HTML5 Video';
         setChip(modeStatus, '方式 通常動画', 'good');
-        video.src = value;
+        video.src = playbackUrl;
         video.load();
       }
 
@@ -580,6 +657,9 @@
       playbackInput.value = '';
       currentMode = '未開始';
       lastError = '';
+      activePlaybackUrl = '';
+      convertedUrl.value = '';
+      conversionResult.hidden = true;
       overlay.hidden = false;
       overlayTitle.textContent = 'URLを入力してください';
       overlayCopy.textContent = '変換URLがブラウザまで届くかを確認できます。';
@@ -592,7 +672,7 @@
       volumeValue.textContent = '100% / ON';
       eventValue.textContent = '待機中';
       detailMessage.textContent = '再生を開始すると診断結果が表示されます。';
-      inputMessage.textContent = 'URLを貼り付けて「再生テスト」を押してください。音量100%・ミュート解除で開始します。';
+      inputMessage.textContent = 'YouTubeまたは変換済みURLを貼り付けてください。音量100%・ミュート解除で開始します。';
       inputMessage.className = 'input-message';
       clearButton.disabled = true;
       copyResultButton.disabled = true;
@@ -602,7 +682,8 @@
 
     const diagnosticText = () => [
       'VRChat風 Player Test',
-      `URL: ${playbackInput.value.trim() || '未入力'}`,
+      `入力URL: ${playbackInput.value.trim() || '未入力'}`,
+      `再生URL: ${activePlaybackUrl || '未変換'}`,
       `方式: ${currentMode}`,
       `映像: ${video.videoWidth && video.videoHeight ? `${video.videoWidth}x${video.videoHeight}` : '未確認'}`,
       `再生位置: ${formatTime(video.currentTime)}`,
@@ -660,6 +741,18 @@
     });
     startButton.addEventListener('click', beginPlayback);
     clearButton.addEventListener('click', clearPlayer);
+    copyUrlButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(convertedUrl.value);
+        inputMessage.textContent = '変換後のVRChat用URLをコピーしました。';
+        inputMessage.className = 'input-message success';
+      } catch {
+        convertedUrl.focus();
+        convertedUrl.select();
+        inputMessage.textContent = '自動コピーできませんでした。表示されたURLを選択してコピーしてください。';
+        inputMessage.className = 'input-message error';
+      }
+    });
     copyResultButton.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(diagnosticText());
