@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="video.piloton.ccの変換URLを、VRChat風プレイヤーで映像・音声・エラーまで確認できます。">
+  <meta name="description" content="YouTubeや対応サイトのURLを変換し、VRChat風プレイヤーで映像・音声・エラーまで確認できます。">
   <title>VRChat Player Test | ぴーちゃんの未来館</title>
   <link rel="stylesheet" href="gate-theme.css">
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.7.1/dist/hls.min.js" defer></script>
@@ -342,17 +342,17 @@
           <span class="eyebrow">VRChat-like playback check</span>
           <h1><span class="gradient-title">Player Test</span><br>再生確認</h1>
         </div>
-        <p class="tester-copy">YouTube URLはPiloton用URLへ変換して再生します。変換済みURLやLive / Stream向けHLSもそのまま確認できます。</p>
+        <p class="tester-copy">YouTubeや対応サイトのURLをPiloton用URLへ変換し、通常動画・音声・Live / Stream向けHLSを自動判定して再生します。</p>
       </div>
 
       <section class="glass-card control-card" aria-label="再生URL入力">
-        <label for="playback-url">YouTube URL または VRChat用URL</label>
+        <label for="playback-url">対応サイト URL または VRChat用URL</label>
         <div class="input-row">
-          <input class="museum-field url-field" id="playback-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=...">
+          <input class="museum-field url-field" id="playback-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://...">
           <button class="test-button" id="start-button" type="button">変換して再生</button>
           <button class="test-button secondary" id="clear-button" type="button" disabled>停止・クリア</button>
         </div>
-        <p class="input-message" id="input-message" role="status" aria-live="polite">YouTubeまたは変換済みURLを貼り付けてください。音量100%・ミュート解除で開始します。</p>
+        <p class="input-message" id="input-message" role="status" aria-live="polite">YouTube・対応サイト・変換済みURLを貼り付けてください。音量100%・ミュート解除で開始します。</p>
         <div class="conversion-result" id="conversion-result" hidden>
           <div>
             <label for="converted-url">変換後のVRChat用URL</label>
@@ -436,6 +436,38 @@
       'music.youtube.com',
       'youtu.be'
     ]);
+    const streamHostRoots = [
+      'nicovideo.jp',
+      'instagram.com',
+      'kkinstagram.com',
+      'dailymotion.com',
+      'rutube.ru',
+      'x.com',
+      'twitter.com',
+      'tiktok.com',
+      'mellow-fan.com',
+      'openrec.tv',
+      'twitcasting.tv',
+      'abema.tv',
+      'tver.jp',
+      'piapro.jp',
+      'soundcloud.com',
+      'video.fc2.com',
+      'rule34video.com',
+      'rule34.xxx',
+      'e621.net',
+      'pornhub.com',
+      'xnxx.com'
+    ];
+    const hlsSourceHostRoots = [
+      'dailymotion.com',
+      'rutube.ru',
+      'xnxx.com',
+      'abema.tv',
+      'tver.jp'
+    ];
+
+    const hostMatches = (host, root) => host === root || host.endsWith(`.${root}`);
 
     const setChip = (element, text, state = '') => {
       element.textContent = text;
@@ -470,11 +502,20 @@
       if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
         return { error: 'HTTPSで始まる正しいURLを入力してください。' };
       }
-      if (!youtubeHosts.has(parsed.hostname.toLowerCase())) {
+      const host = parsed.hostname.toLowerCase();
+      if (!youtubeHosts.has(host)) {
+        if (hostMatches(host, 'video.piloton.cc')) {
+          return { playbackUrl: parsed.href, converted: false };
+        }
+        if (streamHostRoots.some((root) => hostMatches(host, root))) {
+          return {
+            playbackUrl: `https://video.piloton.cc/stream?url=${encodeURIComponent(parsed.href)}`,
+            converted: true
+          };
+        }
         return { playbackUrl: parsed.href, converted: false };
       }
 
-      const host = parsed.hostname.toLowerCase();
       const parts = parsed.pathname.split('/').filter(Boolean);
       let videoId = null;
       if (host === 'youtu.be' && parts.length === 1) {
@@ -512,10 +553,55 @@
       if (!source) return false;
       const host = source.hostname.toLowerCase();
       return /\.m3u8$/i.test(source.pathname)
-        || host === 'tver.jp'
-        || host.endsWith('.tver.jp')
-        || host === 'abema.tv'
-        || host.endsWith('.abema.tv');
+        || hlsSourceHostRoots.some((root) => hostMatches(host, root));
+    };
+
+    const resolvePlaybackTarget = async (playbackUrl) => {
+      let parsed;
+      try {
+        parsed = new URL(playbackUrl);
+      } catch {
+        return { playbackUrl, useHls: false };
+      }
+      if (!hostMatches(parsed.hostname.toLowerCase(), 'video.piloton.cc')) {
+        return { playbackUrl, useHls: isHlsPlayback(playbackUrl) };
+      }
+
+      const requestUrl = new URL(parsed.href);
+      if (requestUrl.pathname === '/stream') requestUrl.searchParams.set('player', '1');
+      const playerUrl = requestUrl.href;
+      const fallback = { playbackUrl: playerUrl, useHls: isHlsPlayback(playbackUrl) };
+
+      let response;
+      try {
+        response = await fetch(playerUrl, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-1' },
+          cache: 'no-store'
+        });
+      } catch {
+        return fallback;
+      }
+      if (!response.ok) {
+        let detail = '変換先の動画を取得できませんでした。';
+        try {
+          const payload = await response.json();
+          if (payload && typeof payload.detail === 'string') detail = payload.detail;
+        } catch {
+          // Keep the friendly fallback message.
+        }
+        throw new Error(detail);
+      }
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
+      const resolvedUrl = response.url || playbackUrl;
+      const resolvedPath = (() => {
+        try { return new URL(resolvedUrl).pathname; } catch { return ''; }
+      })();
+      if (response.body) response.body.cancel().catch(() => {});
+      return {
+        playbackUrl: resolvedUrl,
+        useHls: contentType.includes('mpegurl') || /\.m3u8$/i.test(resolvedPath)
+      };
     };
 
     const teardown = () => {
@@ -595,11 +681,19 @@
       video.muted = false;
       video.volume = 1;
 
-      const useHls = isHlsPlayback(playbackUrl);
+      let resolvedPlayback;
+      try {
+        resolvedPlayback = await resolvePlaybackTarget(playbackUrl);
+      } catch (error) {
+        showError(error instanceof Error ? error.message : '変換先の動画を取得できませんでした。');
+        return;
+      }
+      const mediaUrl = resolvedPlayback.playbackUrl;
+      const useHls = resolvedPlayback.useHls;
       if (useHls && video.canPlayType('application/vnd.apple.mpegurl')) {
         currentMode = 'HLS（ブラウザ標準）';
         setChip(modeStatus, '方式 HLS', 'good');
-        video.src = playbackUrl;
+        video.src = mediaUrl;
         video.load();
       } else if (useHls) {
         if (!window.Hls || !window.Hls.isSupported()) {
@@ -633,12 +727,12 @@
             overlayCopy.textContent = 'ブラウザの自動再生制限により手動操作が必要です。';
           });
         });
-        hls.loadSource(playbackUrl);
+        hls.loadSource(mediaUrl);
         hls.attachMedia(video);
       } else {
         currentMode = 'HTML5 Video';
         setChip(modeStatus, '方式 通常動画', 'good');
-        video.src = playbackUrl;
+        video.src = mediaUrl;
         video.load();
       }
 
@@ -672,7 +766,7 @@
       volumeValue.textContent = '100% / ON';
       eventValue.textContent = '待機中';
       detailMessage.textContent = '再生を開始すると診断結果が表示されます。';
-      inputMessage.textContent = 'YouTubeまたは変換済みURLを貼り付けてください。音量100%・ミュート解除で開始します。';
+      inputMessage.textContent = 'YouTube・対応サイト・変換済みURLを貼り付けてください。音量100%・ミュート解除で開始します。';
       inputMessage.className = 'input-message';
       clearButton.disabled = true;
       copyResultButton.disabled = true;
@@ -770,7 +864,7 @@
         if (parsed.protocol !== 'https:') return;
         playbackInput.value = parsed.href;
         clearButton.disabled = false;
-        inputMessage.textContent = '変換ページからURLを受け取りました。「再生テスト」を押してください。';
+        inputMessage.textContent = 'URLを受け取りました。「変換して再生」を押してください。';
         inputMessage.className = 'input-message success';
       } catch {
         // Ignore malformed query values.

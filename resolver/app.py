@@ -200,6 +200,7 @@ RULE34VIDEO_MEDIA_PROXY_BASE_URL = (
     "https://video.piloton.cc/stream/rule34video/media.mp4?token="
 )
 PORNHUB_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/pornhub/media.mp4?token="
+PLAYER_HLS_PROXY_BASE_URL = "https://video.piloton.cc/stream/player/media"
 TIKTOK_MEDIA_HOST_ROOTS = (
     "tiktok.com",
     "tiktokcdn.com",
@@ -211,6 +212,11 @@ RULE34VIDEO_MEDIA_HOST_ROOTS = (
     "boomio-cdn.com",
 )
 PORNHUB_MEDIA_HOST_ROOTS = ("phncdn.com",)
+PLAYER_HLS_MEDIA_HOST_ROOTS = (
+    "dmcdn.net",
+    "xnxx-cdn.com",
+    "rutube.ru",
+)
 TIKTOK_FORMAT_SELECTOR = os.getenv(
     "TIKTOK_FORMAT_SELECTOR",
     "best[ext=mp4][vcodec^=h264][acodec!=none][height<=?1280]/"
@@ -1734,7 +1740,118 @@ def _read_pornhub_resource(
         return body, response.status, content_type, forwarded_headers
 
 
-def _extract_stream_media(value: str) -> tuple[str, str]:
+def _validate_player_hls_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if not any(_host_matches(host, root) for root in PLAYER_HLS_MEDIA_HOST_ROOTS):
+        raise ValueError("Unexpected Player Test HLS host")
+    return value
+
+
+def _encode_player_hls_token(upstream_url: str) -> str:
+    payload = json.dumps(
+        [
+            _validate_player_hls_url(upstream_url),
+            int(time.time()) + STREAM_TOKEN_SECONDS,
+        ],
+        separators=(",", ":"),
+    ).encode()
+    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+
+
+def _decode_player_hls_token(token: str) -> str:
+    if len(token) > 6000 or not token.startswith("z"):
+        raise HTTPException(status_code=400, detail="Invalid Player Test media token")
+    try:
+        encoded = token[1:]
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + padding)))
+    except (ValueError, TypeError, json.JSONDecodeError, zlib.error) as error:
+        raise HTTPException(status_code=400, detail="Invalid Player Test media token") from error
+    if not isinstance(payload, list) or len(payload) != 2:
+        raise HTTPException(status_code=400, detail="Invalid Player Test media token")
+    upstream_url, expires_at = payload
+    if (
+        not isinstance(upstream_url, str)
+        or not isinstance(expires_at, int)
+        or expires_at < int(time.time())
+        or expires_at > int(time.time()) + 3600
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid Player Test media token")
+    try:
+        return _validate_player_hls_url(upstream_url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid Player Test media target") from error
+
+
+def _player_hls_proxy_url(upstream_url: str) -> str:
+    token = _encode_player_hls_token(upstream_url)
+    extension = Path(urlsplit(upstream_url).path).suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,8}", extension):
+        extension = ".bin"
+    return f"{PLAYER_HLS_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
+
+
+def _rewrite_player_hls_manifest(manifest: str, base_url: str) -> str:
+    def replace_uri(match: re.Match) -> str:
+        absolute_url = _validate_player_hls_url(urljoin(base_url, match.group(1)))
+        return f'URI="{_player_hls_proxy_url(absolute_url)}"'
+
+    rewritten = []
+    for line in manifest.splitlines():
+        if line.startswith("#"):
+            rewritten.append(re.sub(r'URI="([^"]+)"', replace_uri, line))
+        elif line.strip():
+            absolute_url = _validate_player_hls_url(urljoin(base_url, line.strip()))
+            rewritten.append(_player_hls_proxy_url(absolute_url))
+        else:
+            rewritten.append(line)
+    return "\n".join(rewritten) + "\n"
+
+
+def _read_player_hls_resource(
+    upstream_url: str,
+    range_header: str | None = None,
+) -> tuple[bytes, int, str, dict[str, str], str]:
+    request_headers = {"User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]}
+    if range_header and re.fullmatch(r"bytes=(?:\d+-\d*|-\d+)", range_header):
+        request_headers["Range"] = range_header
+    request = UrlRequest(
+        _validate_player_hls_url(upstream_url),
+        headers=request_headers,
+        method="GET",
+    )
+    with urlopen(request, timeout=25) as response:
+        final_url = _validate_player_hls_url(response.geturl())
+        content_type = response.headers.get("Content-Type", "application/octet-stream")
+        is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
+        max_bytes = STREAM_MANIFEST_MAX_BYTES if is_manifest else STREAM_MEDIA_MAX_BYTES
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > max_bytes:
+            raise ValueError("Player Test stream response is too large")
+        body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise ValueError("Player Test stream response is too large")
+        forwarded_headers = {
+            name: response.headers[name]
+            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+            if response.headers.get(name)
+        }
+        return body, response.status, content_type, forwarded_headers, final_url
+
+
+def _create_player_hls_manifest(upstream_url: str) -> str:
+    body, _, _, _, final_url = _read_player_hls_resource(upstream_url)
+    try:
+        manifest = body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("The site returned an invalid HLS manifest") from error
+    if not manifest.startswith("#EXTM3U"):
+        raise ValueError("The site returned an invalid HLS manifest")
+    return _rewrite_player_hls_manifest(manifest, final_url)
+
+
+def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, str]:
     source_host = (urlsplit(value).hostname or "").lower().rstrip(".")
     prefers_compatible_combined = any(
         _host_matches(source_host, root)
@@ -1745,6 +1862,10 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
     is_tver = _host_matches(source_host, "tver.jp")
     is_tiktok = _host_matches(source_host, "tiktok.com")
     is_pornhub = _host_matches(source_host, "pornhub.com")
+    is_player_hls_source = player_mode and any(
+        _host_matches(source_host, root)
+        for root in ("dailymotion.com", "xnxx.com", "rutube.ru")
+    )
     is_rule34video = _host_matches(source_host, "rule34video.com")
     is_rule34xxx = _host_matches(source_host, "rule34.xxx")
     options = {
@@ -1826,6 +1947,11 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
         if progressive_url:
             return "redirect", progressive_url
     if isinstance(direct_url, str):
+        if is_player_hls_source and (
+            str(info.get("protocol", "")).startswith("m3u8")
+            or urlsplit(direct_url).path.lower().endswith(".m3u8")
+        ):
+            return "player-hls-manifest", _create_player_hls_manifest(direct_url)
         if is_rule34video:
             return "redirect", _rule34video_proxy_url(direct_url, value)
         if is_pornhub:
@@ -2589,6 +2715,7 @@ async def health() -> dict[str, str | bool | int]:
 async def resolve_stream(
     request: Request,
     url: str = Query(min_length=1, max_length=2048),
+    player: bool = Query(default=False),
 ) -> Response:
     url = _normalize_stream_source_url(url)
     route, video_id = _validate_stream_source_url(url)
@@ -2635,7 +2762,7 @@ async def resolve_stream(
                     headers=_stream_resolver_headers("original-e621"),
                 )
             stream_kind, stream_content = await asyncio.wait_for(
-                asyncio.to_thread(_extract_stream_media, url),
+                asyncio.to_thread(_extract_stream_media, url, player),
                 timeout=STREAM_EXTRACT_TIMEOUT_SECONDS,
             )
     except DownloadError as error:
@@ -2665,12 +2792,14 @@ async def resolve_stream(
         "abema-manifest",
         "tver-manifest",
         "tver-muxed-manifest",
+        "player-hls-manifest",
     }:
         resolver_path = {
             "manifest": "original-simplified-hls",
             "abema-manifest": "original-abema-hls",
             "tver-manifest": "original-tver-hls",
             "tver-muxed-manifest": "original-tver-muxed-hls",
+            "player-hls-manifest": "player-test-proxied-hls",
         }[stream_kind]
         return Response(
             content=stream_content,
@@ -2958,6 +3087,63 @@ async def proxy_pornhub_media(
             "X-Resolver-Path": "original-pornhub-media",
         },
     )
+
+
+async def _proxy_player_hls_response(request: Request, token: str) -> Response:
+    upstream_url = _decode_player_hls_token(token)
+    try:
+        body, status_code, content_type, upstream_headers, final_url = await asyncio.to_thread(
+            _read_player_hls_resource,
+            upstream_url,
+            request.headers.get("range"),
+        )
+    except HTTPError as error:
+        print(f"Player Test media returned HTTP {error.code}", file=sys.stderr, flush=True)
+        status = 416 if error.code == 416 else 410 if error.code in {401, 403, 404} else 502
+        raise HTTPException(status_code=status, detail="The Player Test stream has expired") from error
+    except (URLError, TimeoutError, ValueError, OSError) as error:
+        print(f"Player Test media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not read the Player Test stream") from error
+
+    is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
+    if is_manifest:
+        try:
+            manifest = body.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise HTTPException(status_code=502, detail="Invalid Player Test manifest") from error
+        body = _rewrite_player_hls_manifest(manifest, final_url).encode()
+        status_code = 200
+
+    return Response(
+        content=body,
+        status_code=status_code,
+        headers={
+            **upstream_headers,
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store" if is_manifest else "public, max-age=300",
+            "Content-Type": "application/vnd.apple.mpegurl" if is_manifest else content_type,
+            "X-Resolver-Path": "player-test-hls" if is_manifest else "player-test-media",
+        },
+    )
+
+
+@app.get("/stream/player/media")
+async def proxy_player_hls_media(
+    request: Request,
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    return await _proxy_player_hls_response(request, token)
+
+
+@app.get("/stream/player/media.{extension}")
+async def proxy_player_hls_media_with_extension(
+    request: Request,
+    extension: str,
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    if not re.fullmatch(r"[a-z0-9]{1,8}", extension):
+        raise HTTPException(status_code=404, detail="Unsupported Player Test stream extension")
+    return await _proxy_player_hls_response(request, token)
 
 
 async def _proxy_niconico_media_response(
