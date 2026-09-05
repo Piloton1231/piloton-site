@@ -6,6 +6,7 @@ import itertools
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -18,7 +19,8 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request as UrlRequ
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from imageio_ffmpeg import get_ffmpeg_exe
 from yt_dlp import YoutubeDL
 from yt_dlp.extractor.abematv import AbemaLicenseRH, AbemaTVBaseIE
 from yt_dlp.networking.exceptions import RequestError
@@ -155,6 +157,7 @@ STREAM_MEDIA_MAX_BYTES = max(
     1_000_000, min(32_000_000, int(os.getenv("STREAM_MEDIA_MAX_BYTES", "12000000")))
 )
 STREAM_PROXY_BASE_URL = "https://video.piloton.cc/stream/niconico"
+NICONICO_MUX_PROXY_BASE_URL = "https://video.piloton.cc/stream/niconico/mux.mp4?token="
 ABEMA_KEY_PROXY_BASE_URL = "https://video.piloton.cc/stream/key.bin?token="
 ABEMA_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/abema/media"
 TVER_MASTER_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/master.m3u8?token="
@@ -1308,7 +1311,7 @@ def _read_abema_resource(
         return body, response.status, content_type, forwarded_headers
 
 
-def _create_niconico_manifest(video_id: str) -> str:
+def _create_niconico_session(video_id: str) -> tuple[str, str]:
     cookie_jar = http.cookiejar.CookieJar()
     opener = build_opener(HTTPCookieProcessor(cookie_jar))
     action_track_id = f"AAAAAAAAAA_{round(time.time() * 1000)}"
@@ -1395,6 +1398,12 @@ def _create_niconico_manifest(video_id: str) -> str:
     if not domand_cookie or not STREAM_COOKIE_PATTERN.fullmatch(domand_cookie):
         raise ValueError("NicoNico stream cookie is missing")
 
+    return master_url, domand_cookie
+
+
+def _create_niconico_manifest(video_id: str) -> str:
+    master_url, domand_cookie = _create_niconico_session(video_id)
+
     body, _, _, _, final_url = _read_niconico_resource(master_url, domand_cookie)
     try:
         manifest = body.decode("utf-8")
@@ -1403,6 +1412,88 @@ def _create_niconico_manifest(video_id: str) -> str:
     if not manifest.startswith("#EXTM3U"):
         raise ValueError("NicoNico returned an invalid HLS manifest")
     return _rewrite_hls_manifest(manifest, final_url, domand_cookie)
+
+
+def _niconico_mux_url(master_url: str, domand_cookie: str) -> str:
+    token = _encode_stream_token(master_url, domand_cookie)
+    return f"{NICONICO_MUX_PROXY_BASE_URL}{quote(token, safe='')}"
+
+
+def _start_niconico_mux_process(master_url: str, domand_cookie: str) -> subprocess.Popen:
+    master_url = _validate_niconico_upstream_url(master_url)
+    if not STREAM_COOKIE_PATTERN.fullmatch(domand_cookie):
+        raise ValueError("Invalid NicoNico stream cookie")
+    command = [
+        get_ffmpeg_exe(),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-rw_timeout",
+        "20000000",
+        "-user_agent",
+        NICONICO_FRONTEND_HEADERS["User-Agent"],
+        "-headers",
+        f"Cookie: domand_bid={domand_cookie}\r\n",
+        "-i",
+        master_url,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-map_metadata",
+        "-1",
+        "-movflags",
+        "frag_keyframe+empty_moov+default_base_moof",
+        "-frag_duration",
+        "2000000",
+        "-max_interleave_delta",
+        "0",
+        "-flush_packets",
+        "1",
+        "-f",
+        "mp4",
+        "pipe:1",
+    ]
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        bufsize=0,
+    )
+
+
+def _iter_niconico_mux(process: subprocess.Popen):
+    try:
+        if process.stdout is None:
+            return
+        while True:
+            chunk = process.stdout.read(64 * 1024)
+            if not chunk:
+                break
+            yield chunk
+        return_code = process.wait(timeout=5)
+        if return_code:
+            print(
+                f"NicoNico mux process exited with status {return_code}",
+                file=sys.stderr,
+                flush=True,
+            )
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
 
 
 def _check_rate_limit(client: str) -> None:
@@ -1748,14 +1839,15 @@ async def resolve_stream(
     try:
         async with _stream_slots:
             if route == "niconico" and video_id:
-                manifest = await asyncio.to_thread(_create_niconico_manifest, video_id)
-                return Response(
-                    content=manifest,
-                    media_type="application/vnd.apple.mpegurl",
+                master_url, domand_cookie = await asyncio.to_thread(
+                    _create_niconico_session, video_id
+                )
+                return RedirectResponse(
+                    _niconico_mux_url(master_url, domand_cookie),
+                    status_code=307,
                     headers={
-                        "Access-Control-Allow-Origin": "*",
                         "Cache-Control": "no-store",
-                        "X-Resolver-Path": "original-niconico-hls",
+                        "X-Resolver-Path": "original-niconico-mux",
                     },
                 )
             stream_kind, stream_content = await asyncio.wait_for(
@@ -2025,6 +2117,33 @@ async def _proxy_niconico_media_response(
         status_code = 200
 
     return Response(content=body, status_code=status_code, headers=response_headers)
+
+
+@app.get("/stream/niconico/mux.mp4")
+async def stream_muxed_niconico_media(
+    token: str = Query(min_length=1, max_length=12000),
+) -> StreamingResponse:
+    master_url, domand_cookie = _decode_stream_token(token)
+    try:
+        process = await asyncio.to_thread(
+            _start_niconico_mux_process,
+            master_url,
+            domand_cookie,
+        )
+    except (OSError, ValueError) as error:
+        print(f"NicoNico mux startup failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not start the NicoNico stream") from error
+    return StreamingResponse(
+        _iter_niconico_mux(process),
+        media_type="video/mp4",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'inline; filename="niconico.mp4"',
+            "X-Content-Type-Options": "nosniff",
+            "X-Resolver-Path": "original-niconico-muxed-media",
+        },
+    )
 
 
 @app.get("/stream/niconico/{track}.{extension}")
