@@ -416,6 +416,9 @@ def _validate_stream_source_url(value: str) -> tuple[str, str | None]:
     if _host_matches(host, "rule34.xxx"):
         return "rule34xxx", None
 
+    if _host_matches(host, "e621.net"):
+        return "e621", None
+
     if _host_matches(host, "soundcloud.com"):
         path_parts = [part for part in parsed.path.split("/") if part]
         if (
@@ -577,6 +580,49 @@ def _resolve_rule34xxx_media(value: str) -> str:
     media_host = (urlsplit(media_url).hostname or "").lower().rstrip(".")
     if not _host_matches(media_host, "rule34.xxx"):
         raise ValueError("Unexpected Rule34.xxx media host")
+    return media_url
+
+
+def _resolve_e621_media(value: str) -> str:
+    parsed = urlsplit(value)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    post_match = re.fullmatch(r"/posts/(\d+)/?", parsed.path)
+    if not _host_matches(host, "e621.net") or not post_match:
+        raise ValueError("Invalid e621 post URL")
+
+    endpoint = f"https://e621.net/posts/{post_match.group(1)}.json"
+    request = UrlRequest(
+        endpoint,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "PilotonVRChatResolver/1.0 (https://piloton.cc)",
+        },
+        method="GET",
+    )
+    with urlopen(request, timeout=20) as response:
+        final_host = (urlsplit(response.geturl()).hostname or "").lower().rstrip(".")
+        if not _host_matches(final_host, "e621.net"):
+            raise ValueError("Unexpected e621 API redirect")
+        payload = json.load(response)
+    post = payload.get("post") if isinstance(payload, dict) else None
+    if not isinstance(post, dict):
+        raise ValueError("e621 post data is missing")
+
+    sample = post.get("sample") if isinstance(post.get("sample"), dict) else {}
+    alternates = sample.get("alternates") if isinstance(sample.get("alternates"), dict) else {}
+    samples = alternates.get("samples") if isinstance(alternates.get("samples"), dict) else {}
+    selected = samples.get("720p") or samples.get("480p")
+    media_url = selected.get("url") if isinstance(selected, dict) else None
+    if not isinstance(media_url, str):
+        file_data = post.get("file") if isinstance(post.get("file"), dict) else {}
+        media_url = file_data.get("url")
+    if not isinstance(media_url, str):
+        raise StreamCompatibilityError("The e621 post did not provide media")
+
+    media_url = _validate_direct_media_url(media_url)
+    media_host = (urlsplit(media_url).hostname or "").lower().rstrip(".")
+    if not _host_matches(media_host, "e621.net"):
+        raise ValueError("Unexpected e621 media host")
     return media_url
 
 
@@ -2127,6 +2173,16 @@ async def resolve_stream(
                     headers={
                         "Cache-Control": "no-store",
                         "X-Resolver-Path": "original-rule34xxx",
+                    },
+                )
+            if route == "e621":
+                media_url = await asyncio.to_thread(_resolve_e621_media, url)
+                return RedirectResponse(
+                    media_url,
+                    status_code=307,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Resolver-Path": "original-e621",
                     },
                 )
             stream_kind, stream_content = await asyncio.wait_for(
