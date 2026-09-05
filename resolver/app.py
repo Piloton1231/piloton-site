@@ -1083,6 +1083,7 @@ def _mux_tver_segment(video_segment: dict, audio_segment: dict) -> bytes:
             "-hide_banner",
             "-loglevel",
             "error",
+            "-copyts",
             "-rw_timeout",
             "20000000",
             "-protocol_whitelist",
