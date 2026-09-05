@@ -59,6 +59,7 @@
 
     .top-bar,
     .tool-card,
+    .supported-sites,
     .info-card,
     .result-card {
       border: 1px solid rgba(106, 233, 255, 0.28);
@@ -408,6 +409,81 @@
     .info-card strong { display: block; margin-bottom: 8px; color: var(--cyan); }
     .info-card p { margin: 0; color: var(--soft); font-size: 13px; line-height: 1.7; }
 
+    .supported-sites {
+      margin-top: 18px;
+      padding: clamp(22px, 4vw, 32px);
+      border-radius: 28px;
+    }
+
+    .supported-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 20px;
+    }
+
+    .supported-heading h2 {
+      margin: 4px 0 0;
+      font-size: clamp(24px, 4vw, 34px);
+    }
+
+    .supported-heading p {
+      max-width: 440px;
+      margin: 0;
+      color: var(--soft);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .support-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .support-group {
+      min-width: 0;
+      padding: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 20px;
+      background: rgba(2, 8, 24, 0.58);
+    }
+
+    .support-group h3 {
+      margin: 0 0 12px;
+      color: var(--green);
+      font-size: 15px;
+    }
+
+    .support-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .support-list li {
+      max-width: 100%;
+      padding: 7px 10px;
+      border: 1px solid rgba(61, 247, 255, 0.2);
+      border-radius: 999px;
+      color: #dffcff;
+      background: rgba(61, 247, 255, 0.07);
+      font-size: 13px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .support-note {
+      margin: 14px 2px 0;
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
     .notice {
       margin-top: 18px;
       padding: 18px 20px;
@@ -422,13 +498,14 @@
     code { color: var(--green); word-break: break-all; }
 
     @media (max-width: 720px) {
-      .input-row, .link-row, .stream-result-row, .info-grid { grid-template-columns: 1fr; }
+      .input-row, .link-row, .stream-result-row, .info-grid, .support-grid { grid-template-columns: 1fr; }
       .top-bar { border-radius: 22px; }
       .brand { letter-spacing: 0.04em; }
       button { width: 100%; }
       .result-summary { align-items: stretch; flex-direction: column; }
       .summary-actions { justify-content: stretch; }
       .video-heading { grid-template-columns: 1fr; }
+      .supported-heading { align-items: stretch; flex-direction: column; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -491,6 +568,52 @@
           <p class="message success" id="stream-result-message" role="status" aria-live="polite">リンクを作成しました。</p>
         </article>
       </section>
+    </section>
+
+    <section class="supported-sites" aria-labelledby="supported-sites-title">
+      <div class="supported-heading">
+        <div>
+          <span class="step-label">Supported Sources</span>
+          <h2 id="supported-sites-title">対応サイト一覧</h2>
+        </div>
+        <p>YouTube以外は、変換後のリンクをVRChatのLive / Streamモードで使用してください。</p>
+      </div>
+      <div class="support-grid">
+        <article class="support-group">
+          <h3>動画・プレイリスト</h3>
+          <ul class="support-list">
+            <li>YouTube</li>
+            <li>ニコニコ動画</li>
+            <li>Instagram（公開投稿）</li>
+          </ul>
+        </article>
+        <article class="support-group">
+          <h3>配信・SNS・音声</h3>
+          <ul class="support-list">
+            <li>X / Twitter</li>
+            <li>TikTok</li>
+            <li>TVer</li>
+            <li>ABEMA</li>
+            <li>mellow-fan / OPENREC</li>
+            <li>TwitCasting</li>
+            <li>piapro</li>
+            <li>SoundCloud</li>
+            <li>FC2動画</li>
+          </ul>
+        </article>
+        <article class="support-group">
+          <h3>その他・直接URL</h3>
+          <ul class="support-list">
+            <li>Rule34Video</li>
+            <li>Rule34.xxx</li>
+            <li>e621</li>
+            <li>MP4 / WebM / M3U8</li>
+            <li>MP3 / M4A / AAC</li>
+            <li>JPG / PNG / GIF / WebP</li>
+          </ul>
+        </article>
+      </div>
+      <p class="support-note">公開URLのみ対応しています。非公開、ログイン必須、有料コンテンツは変換できません。サイト側の仕様変更により一時的に利用できない場合があります。</p>
     </section>
 
     <section class="info-grid" aria-label="使い方">
