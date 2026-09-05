@@ -90,6 +90,10 @@ FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}
 YOUTUBE_PROXY_URL = os.getenv("YOUTUBE_PROXY_URL", "").strip()
 CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
 EDGE_CACHE_SECONDS = max(0, int(os.getenv("EDGE_CACHE_SECONDS", str(CACHE_SECONDS))))
+STREAM_EDGE_CACHE_SECONDS = max(
+    0,
+    min(60, int(os.getenv("STREAM_EDGE_CACHE_SECONDS", "20"))),
+)
 METADATA_CACHE_SECONDS = max(0, int(os.getenv("METADATA_CACHE_SECONDS", "300")))
 PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))))
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "30")))
@@ -231,6 +235,20 @@ def _direct_redirect_headers() -> dict[str, str]:
     if EDGE_CACHE_SECONDS:
         headers["Vercel-CDN-Cache-Control"] = (
             f"public, s-maxage={EDGE_CACHE_SECONDS}, stale-while-revalidate=60"
+        )
+    return headers
+
+
+def _stream_resolver_headers(resolver_path: str) -> dict[str, str]:
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Resolver-Path": resolver_path,
+    }
+    if STREAM_EDGE_CACHE_SECONDS:
+        headers["Vercel-CDN-Cache-Control"] = (
+            "public, "
+            f"s-maxage={STREAM_EDGE_CACHE_SECONDS}, "
+            f"stale-while-revalidate={STREAM_EDGE_CACHE_SECONDS}"
         )
     return headers
 
@@ -2450,6 +2468,7 @@ async def health() -> dict[str, str | bool | int]:
         "proxyEnabled": bool(YOUTUBE_PROXY_URL),
         "jsRuntimeBundled": BUNDLED_JS_RUNTIME_PATH.is_file(),
         "edgeCacheSeconds": EDGE_CACHE_SECONDS,
+        "streamEdgeCacheSeconds": STREAM_EDGE_CACHE_SECONDS,
     }
 
 
@@ -2467,7 +2486,7 @@ async def resolve_stream(
         return RedirectResponse(
             _validate_direct_media_url(url),
             status_code=307,
-            headers={"Cache-Control": "no-store", "X-Resolver-Path": "direct-media"},
+            headers=_stream_resolver_headers("direct-media"),
         )
 
     try:
@@ -2479,40 +2498,28 @@ async def resolve_stream(
                 return RedirectResponse(
                     _niconico_mux_url(master_url, domand_cookie),
                     status_code=307,
-                    headers={
-                        "Cache-Control": "no-store",
-                        "X-Resolver-Path": "original-niconico-mux",
-                    },
+                    headers=_stream_resolver_headers("original-niconico-mux"),
                 )
             if route == "instagram":
                 media_url = await asyncio.to_thread(_resolve_instagram_media, url)
                 return RedirectResponse(
                     media_url,
                     status_code=307,
-                    headers={
-                        "Cache-Control": "no-store",
-                        "X-Resolver-Path": "instagram-kkinstagram",
-                    },
+                    headers=_stream_resolver_headers("instagram-kkinstagram"),
                 )
             if route == "rule34xxx":
                 media_url = await asyncio.to_thread(_resolve_rule34xxx_media, url)
                 return RedirectResponse(
                     media_url,
                     status_code=307,
-                    headers={
-                        "Cache-Control": "no-store",
-                        "X-Resolver-Path": "original-rule34xxx",
-                    },
+                    headers=_stream_resolver_headers("original-rule34xxx"),
                 )
             if route == "e621":
                 media_url = await asyncio.to_thread(_resolve_e621_media, url)
                 return RedirectResponse(
                     media_url,
                     status_code=307,
-                    headers={
-                        "Cache-Control": "no-store",
-                        "X-Resolver-Path": "original-e621",
-                    },
+                    headers=_stream_resolver_headers("original-e621"),
                 )
             stream_kind, stream_content = await asyncio.wait_for(
                 asyncio.to_thread(_extract_stream_media, url),
@@ -2556,15 +2563,14 @@ async def resolve_stream(
             content=stream_content,
             media_type="application/vnd.apple.mpegurl",
             headers={
+                **_stream_resolver_headers(resolver_path),
                 "Access-Control-Allow-Origin": "*",
-                "Cache-Control": "no-store",
-                "X-Resolver-Path": resolver_path,
             },
         )
     return RedirectResponse(
         stream_content,
         status_code=307,
-        headers={"Cache-Control": "no-store", "X-Resolver-Path": "original-direct-media"},
+        headers=_stream_resolver_headers("original-direct-media"),
     )
 
 
