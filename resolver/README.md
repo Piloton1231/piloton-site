@@ -26,6 +26,7 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 - `GET /stream?url=<動画URL>` — ニコニコ動画は独自HLSを生成し、その他の対応サイトは直接メディアURLまたは整理済みHLSを返す
 - `GET /stream/media.<拡張子>?token=<一時トークン>` — ニコニコ動画のHLSプレイリスト、暗号鍵、動画・音声断片を元の拡張子付きで中継
 - `GET /stream/key.bin?token=<一時トークン>` — ABEMA HLS用の16バイト暗号鍵を期限付きで返却
+- `GET /stream/abema/media.<拡張子>?token=<一時トークン>` — ABEMAの動画・音声一体型HLS断片を動画ドメイン内で中継
 - `GET /stream/tver/master.m3u8?token=<一時トークン>` — TVerの720p映像と既定音声をVRChat向けHLSとして返却
 - `GET /stream/tver/media.<拡張子>?token=<一時トークン>` — TVerの音声・映像プレイリスト、暗号鍵、断片を動画ドメイン内で中継
 - `GET /resolve?url=<YouTube URL>` — YouTube URLを検証して一時的な `googlevideo.com` URLへ転送
@@ -41,7 +42,7 @@ VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` 
 - プレイリストは最大200件（`PLAYLIST_MAX_ITEMS` で変更可能）
 - 簡易キャッシュ、同時実行数制限、アクセス回数制限付き
 - 通常のアクセスログは無効
-- ニコニコ動画とTVerの中継は通信量を消費するため、小規模利用を前提とする
+- ニコニコ動画、ABEMA、TVerの中継は通信量を消費するため、小規模利用を前提とする
 
 ## 設置
 

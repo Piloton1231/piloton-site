@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from yt_dlp import YoutubeDL
-from yt_dlp.extractor.abematv import AbemaLicenseRH
+from yt_dlp.extractor.abematv import AbemaLicenseRH, AbemaTVBaseIE
 from yt_dlp.networking.exceptions import RequestError
 from yt_dlp.utils import DownloadError
 
@@ -155,6 +155,7 @@ STREAM_MEDIA_MAX_BYTES = max(
 )
 STREAM_PROXY_BASE_URL = "https://video.piloton.cc/stream/media"
 ABEMA_KEY_PROXY_BASE_URL = "https://video.piloton.cc/stream/key.bin?token="
+ABEMA_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/abema/media"
 TVER_MASTER_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/master.m3u8?token="
 TVER_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/media"
 STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~-]{16,256}")
@@ -319,6 +320,11 @@ def _host_matches(host: str, root: str) -> bool:
     return host == root or host.endswith(f".{root}")
 
 
+def _normalize_stream_source_url(value: str) -> str:
+    value = value.strip()
+    return re.sub(r"\\(?=[_&])", "", value)
+
+
 def _validate_stream_source_url(value: str) -> tuple[str, str | None]:
     if len(value) > 2048:
         raise HTTPException(status_code=400, detail="URL is too long")
@@ -421,6 +427,17 @@ def _replace_hls_attribute(line: str, name: str, value: str, *, quoted: bool = T
     return f"{line},{replacement}"
 
 
+def _normalize_hls_audio_rendition(line: str) -> str:
+    attributes = _hls_attributes(line)
+    if not line.startswith("#EXT-X-MEDIA:") or attributes.get("TYPE") != "AUDIO":
+        return line
+    line = _replace_hls_attribute(line, "DEFAULT", "YES", quoted=False)
+    line = _replace_hls_attribute(line, "AUTOSELECT", "YES", quoted=False)
+    if not attributes.get("CHANNELS"):
+        line = _replace_hls_attribute(line, "CHANNELS", "2")
+    return line
+
+
 def _read_public_hls_manifest(value: str) -> tuple[str, str]:
     value = _validate_direct_media_url(value)
     request = UrlRequest(
@@ -512,9 +529,7 @@ def _simplify_public_hls_master(master_url: str) -> str:
         if audio_uri:
             absolute_audio_url = _validate_direct_media_url(urljoin(final_url, audio_uri))
             audio_line = _replace_hls_attribute(audio_line, "URI", absolute_audio_url)
-            audio_line = _replace_hls_attribute(audio_line, "DEFAULT", "YES", quoted=False)
-            audio_line = _replace_hls_attribute(audio_line, "AUTOSELECT", "YES", quoted=False)
-            result.append(audio_line)
+            result.append(_normalize_hls_audio_rendition(audio_line))
 
     stream_line = re.sub(r',PATHWAY-ID=(?:"[^"]*"|[^,]*)', "", selected["line"])
     absolute_video_url = _validate_direct_media_url(urljoin(final_url, selected["uri"]))
@@ -575,21 +590,6 @@ def _tver_proxy_url(upstream_url: str) -> str:
     return f"{TVER_MEDIA_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
 
 
-def _strip_hls_audio_codecs(line: str) -> str:
-    attributes = _hls_attributes(line)
-    if not attributes.get("AUDIO") or not attributes.get("CODECS"):
-        return line
-    codecs = [codec.strip() for codec in attributes["CODECS"].split(",")]
-    video_codecs = [
-        codec
-        for codec in codecs
-        if not codec.lower().startswith(("mp4a", "ac-3", "ec-3", "opus", "vorbis"))
-    ]
-    if not video_codecs:
-        return line
-    return _replace_hls_attribute(line, "CODECS", ",".join(video_codecs))
-
-
 def _rewrite_tver_hls_manifest(manifest: str, base_url: str) -> str:
     def replace_uri(match: re.Match) -> str:
         absolute_url = _validate_tver_upstream_url(urljoin(base_url, match.group(1)))
@@ -599,8 +599,7 @@ def _rewrite_tver_hls_manifest(manifest: str, base_url: str) -> str:
     for line in manifest.splitlines():
         if line.startswith("#"):
             line = re.sub(r'URI="([^"]+)"', replace_uri, line)
-            if line.startswith("#EXT-X-STREAM-INF:"):
-                line = _strip_hls_audio_codecs(line)
+            line = _normalize_hls_audio_rendition(line)
             rewritten.append(line)
         elif line.strip():
             absolute_url = _validate_tver_upstream_url(urljoin(base_url, line.strip()))
@@ -668,6 +667,55 @@ def _decode_abema_key_token(token: str) -> bytes:
     return bytes.fromhex(key_hex)
 
 
+def _validate_abema_upstream_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    parsed = urlsplit(value)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host != "vod-abematv.akamaized.net" or not parsed.path.startswith(("/tsvpg/", "/program/")):
+        raise ValueError("Unexpected ABEMA media host")
+    return value
+
+
+def _encode_abema_stream_token(upstream_url: str) -> str:
+    payload = json.dumps(
+        [_validate_abema_upstream_url(upstream_url), int(time.time()) + STREAM_TOKEN_SECONDS],
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_abema_stream_token(token: str) -> str:
+    if len(token) > 6000:
+        raise HTTPException(status_code=400, detail="Invalid ABEMA stream token")
+    try:
+        padding = "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(token + padding))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=400, detail="Invalid ABEMA stream token") from error
+    if not isinstance(payload, list) or len(payload) != 2:
+        raise HTTPException(status_code=400, detail="Invalid ABEMA stream token")
+    upstream_url, expires_at = payload
+    if (
+        not isinstance(upstream_url, str)
+        or not isinstance(expires_at, int)
+        or expires_at < int(time.time())
+        or expires_at > int(time.time()) + 3600
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid ABEMA stream token")
+    try:
+        return _validate_abema_upstream_url(upstream_url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid ABEMA stream target") from error
+
+
+def _abema_proxy_url(upstream_url: str) -> str:
+    token = _encode_abema_stream_token(upstream_url)
+    extension = Path(urlsplit(upstream_url).path).suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,8}", extension):
+        extension = ".bin"
+    return f"{ABEMA_MEDIA_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
+
+
 def _read_abema_video_key(downloader: YoutubeDL, license_url: str) -> bytes:
     parsed = urlsplit(license_url)
     if (
@@ -720,7 +768,7 @@ def _create_abema_manifest(downloader: YoutubeDL, info: dict) -> str:
                 re.sub(r'URI="(abematv-license://[^"]+)"', replace_key_uri, line)
             )
         elif line.strip():
-            rewritten.append(_validate_direct_media_url(urljoin(final_url, line.strip())))
+            rewritten.append(_abema_proxy_url(urljoin(final_url, line.strip())))
         else:
             rewritten.append(line)
     return "\n".join(rewritten) + "\n"
@@ -781,6 +829,7 @@ def _extract_stream_media(value: str) -> tuple[str, str]:
 
     with YoutubeDL(options) as downloader:
         if is_abema:
+            AbemaTVBaseIE._MEDIATOKEN = None
             abema_extractor = downloader.get_info_extractor("AbemaTV")
             downloader._request_director.add_handler(
                 AbemaLicenseRH(ie=abema_extractor, logger=None)
@@ -912,7 +961,8 @@ def _rewrite_hls_manifest(manifest: str, base_url: str, domand_cookie: str) -> s
     rewritten = []
     for line in manifest.splitlines():
         if line.startswith("#"):
-            rewritten.append(re.sub(r'URI="([^"]+)"', replace_uri, line))
+            line = re.sub(r'URI="([^"]+)"', replace_uri, line)
+            rewritten.append(_normalize_hls_audio_rendition(line))
         elif line.strip():
             absolute_url = urljoin(base_url, line.strip())
             _validate_niconico_upstream_url(absolute_url)
@@ -984,6 +1034,35 @@ def _read_tver_resource(
             if response.headers.get(name)
         }
         return body, response.status, content_type, forwarded_headers, final_url
+
+
+def _read_abema_resource(
+    upstream_url: str,
+    range_header: str | None = None,
+) -> tuple[bytes, int, str, dict[str, str]]:
+    request_headers = {"User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]}
+    if range_header and re.fullmatch(r"bytes=(?:\d+-\d*|-\d+)", range_header):
+        request_headers["Range"] = range_header
+    request = UrlRequest(
+        _validate_abema_upstream_url(upstream_url),
+        headers=request_headers,
+        method="GET",
+    )
+    with urlopen(request, timeout=25) as response:
+        _validate_abema_upstream_url(response.geturl())
+        content_type = response.headers.get("Content-Type", "video/mp2t")
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > STREAM_MEDIA_MAX_BYTES:
+            raise ValueError("ABEMA stream response is too large")
+        body = response.read(STREAM_MEDIA_MAX_BYTES + 1)
+        if len(body) > STREAM_MEDIA_MAX_BYTES:
+            raise ValueError("ABEMA stream response is too large")
+        forwarded_headers = {
+            name: response.headers[name]
+            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+            if response.headers.get(name)
+        }
+        return body, response.status, content_type, forwarded_headers
 
 
 def _create_niconico_manifest(video_id: str) -> str:
@@ -1411,6 +1490,7 @@ async def resolve_stream(
     request: Request,
     url: str = Query(min_length=1, max_length=2048),
 ) -> Response:
+    url = _normalize_stream_source_url(url)
     route, video_id = _validate_stream_source_url(url)
     client = _request_client_key(request)
     _check_rate_limit(client)
@@ -1497,6 +1577,55 @@ async def serve_abema_video_key(
             "X-Resolver-Path": "original-abema-key",
         },
     )
+
+
+async def _proxy_abema_media_response(request: Request, token: str) -> Response:
+    upstream_url = _decode_abema_stream_token(token)
+    range_header = request.headers.get("range")
+    try:
+        body, status_code, content_type, upstream_headers = await asyncio.to_thread(
+            _read_abema_resource,
+            upstream_url,
+            range_header,
+        )
+    except HTTPError as error:
+        print(f"ABEMA media returned HTTP {error.code}", file=sys.stderr, flush=True)
+        status = 410 if error.code in {401, 403, 404} else 502
+        raise HTTPException(status_code=status, detail="The ABEMA stream has expired") from error
+    except (URLError, TimeoutError, ValueError, OSError) as error:
+        print(f"ABEMA media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not read the ABEMA stream") from error
+
+    return Response(
+        content=body,
+        status_code=status_code,
+        headers={
+            **upstream_headers,
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=300",
+            "Content-Type": content_type or "video/mp2t",
+            "X-Resolver-Path": "original-abema-media",
+        },
+    )
+
+
+@app.get("/stream/abema/media")
+async def proxy_abema_media(
+    request: Request,
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    return await _proxy_abema_media_response(request, token)
+
+
+@app.get("/stream/abema/media.{extension}")
+async def proxy_abema_media_with_extension(
+    request: Request,
+    extension: str,
+    token: str = Query(min_length=1, max_length=6000),
+) -> Response:
+    if not re.fullmatch(r"[a-z0-9]{1,8}", extension):
+        raise HTTPException(status_code=404, detail="Unsupported ABEMA stream extension")
+    return await _proxy_abema_media_response(request, token)
 
 
 @app.get("/stream/tver/master.m3u8")
