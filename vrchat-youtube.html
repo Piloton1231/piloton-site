@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="YouTube動画・プレイリストをタイトル付きでVRChat動画プレイヤー用URLへ変換します。">
-  <title>VRChat YouTube URL | ぴーちゃんの未来館</title>
+  <meta name="description" content="YouTube動画・プレイリストと各種動画サイトをVRChat動画プレイヤー用URLへ変換します。">
+  <title>VRChat URL Converter | ぴーちゃんの未来館</title>
   <style>
     :root {
       --bg: #02040d;
@@ -353,6 +353,50 @@
       letter-spacing: 0.1em;
     }
 
+    .stream-result-card {
+      margin-top: 20px;
+      padding: clamp(18px, 3vw, 26px);
+      border: 1px solid rgba(124, 255, 196, 0.38);
+      border-radius: 24px;
+      background:
+        linear-gradient(135deg, rgba(124, 255, 196, 0.08), rgba(61, 247, 255, 0.05)),
+        rgba(4, 13, 32, 0.9);
+    }
+
+    .stream-result-card h2 {
+      margin: 6px 0 18px;
+      font-size: clamp(22px, 4vw, 32px);
+    }
+
+    .stream-result-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 12px;
+    }
+
+    .player-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: 0 18px;
+      border: 1px solid rgba(61, 247, 255, 0.34);
+      border-radius: 15px;
+      color: var(--cyan);
+      background: rgba(61, 247, 255, 0.08);
+      font-size: 13px;
+      font-weight: 900;
+      text-decoration: none;
+      transition: transform 0.18s ease, border-color 0.18s ease;
+    }
+
+    .player-link:hover,
+    .player-link:focus-visible {
+      transform: translateY(-2px);
+      border-color: var(--cyan);
+      outline: none;
+    }
+
     .info-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -378,7 +422,7 @@
     code { color: var(--green); word-break: break-all; }
 
     @media (max-width: 720px) {
-      .input-row, .link-row, .info-grid { grid-template-columns: 1fr; }
+      .input-row, .link-row, .stream-result-row, .info-grid { grid-template-columns: 1fr; }
       .top-bar { border-radius: 22px; }
       .brand { letter-spacing: 0.04em; }
       button { width: 100%; }
@@ -400,20 +444,20 @@
     </header>
 
     <section class="hero">
-      <span class="kicker">VRChat Video Helper</span>
-      <h1><span class="gradient-title">YouTube URL</span><br>コンバーター</h1>
-      <p class="lead">YouTube動画やプレイリストを、タイトル付きでVRChat動画プレイヤー用URLへ変換します。</p>
+      <span class="kicker">VRChat Video / Stream Helper</span>
+      <h1><span class="gradient-title">VRChat URL</span><br>コンバーター</h1>
+      <p class="lead">YouTubeの動画・プレイリストと、ニコニコ動画などの配信URLを自動判定し、VRChat用リンクへ変換します。</p>
     </section>
 
     <section class="tool-card" aria-label="URL変換ツール">
       <span class="step-label">Step 01</span>
-      <label for="youtube-url">YouTube URL</label>
+      <label for="youtube-url">動画・プレイリスト・配信URL</label>
       <div class="input-row">
-        <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=...&amp;list=...">
-        <button id="create-button" type="button">一覧を変換</button>
+        <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="YouTube / ニコニコ動画 / X / TikTok / TVer など">
+        <button id="create-button" type="button">変換</button>
         <button class="ghost" id="clear-button" type="button" disabled>クリア</button>
       </div>
-      <p class="message" id="input-message" role="status" aria-live="polite">YouTubeの公開動画URLまたはプレイリストURLを入力してください。</p>
+      <p class="message" id="input-message" role="status" aria-live="polite">HTTPSの動画・プレイリスト・配信URLを入力してください。</p>
 
       <section id="results" hidden>
         <div class="divider" aria-hidden="true"></div>
@@ -431,16 +475,32 @@
         <p class="message" id="result-message" role="status" aria-live="polite"></p>
         <div class="result-list" id="result-list"></div>
       </section>
+
+      <section id="stream-result" hidden>
+        <div class="divider" aria-hidden="true"></div>
+        <span class="step-label">Step 02</span>
+        <article class="stream-result-card">
+          <span class="route-tag">LIVE / STREAM MODE</span>
+          <h2 id="stream-service-name">Stream URL</h2>
+          <label for="stream-result-url">VRChat用リンク</label>
+          <div class="stream-result-row">
+            <input id="stream-result-url" type="text" readonly>
+            <button class="compact" id="copy-stream-button" type="button">コピー</button>
+            <a class="player-link" id="stream-player-link" href="vrchat-player-test.html">再生確認 →</a>
+          </div>
+          <p class="message success" id="stream-result-message" role="status" aria-live="polite">リンクを作成しました。</p>
+        </article>
+      </section>
     </section>
 
     <section class="info-grid" aria-label="使い方">
-      <article class="info-card"><strong>1. URLを入力</strong><p>単体動画、視聴中のプレイリスト、プレイリストページのURLを貼り付けます。</p></article>
-      <article class="info-card"><strong>2. タイトル付きで変換</strong><p>プレイリストは一覧で変換し、URLで選ばれていた動画を先頭に表示します。</p></article>
-      <article class="info-card"><strong>3. VRChatへ貼る</strong><p>1件ずつ、またはまとめてコピーして動画プレイヤーへ貼り付けます。</p></article>
+      <article class="info-card"><strong>1. URLを入力</strong><p>YouTube、ニコニコ動画、各種配信サイト、直接メディアURLを同じ欄に貼り付けます。</p></article>
+      <article class="info-card"><strong>2. 自動判定で変換</strong><p>YouTubeプレイリストはタイトル一覧、それ以外はLive / Streamモード用リンクを作成します。</p></article>
+      <article class="info-card"><strong>3. コピーまたは確認</strong><p>VRChatへ貼り付けるか、確認用プレイヤーで映像・音声をチェックできます。</p></article>
     </section>
 
     <aside class="notice">
-      メインリンクはPiloton管理の変換機能を先に試し、YouTube側に拒否された時だけKsync予備経路へ自動で切り替えます。予備経路では外部サービス（r.0cm.org / ksync.arcanescripts.com）へYouTube URLとアクセス情報が送信されます。プレイリストは最大200件です。非公開・年齢制限・有料コンテンツには対応しません。Googleアカウント情報は入力しないでください。VRChat側で「Allow Untrusted URLs」が必要になる場合があります。動画の権利と各サービスの利用規約を守って使用してください。
+      YouTubeのメインリンクはPiloton管理の変換機能を使い、Ksyncは手動で選べる予備リンクとして表示します。予備リンクでは外部サービス（r.0cm.org / ksync.arcanescripts.com）へYouTube URLとアクセス情報が送信されます。プレイリストは最大200件です。ニコニコ動画などYouTube以外の変換リンクは、VRChatのLive / Streamモードで使用してください。非公開・ログイン必須・有料コンテンツには対応しません。動画の権利と各サービスの利用規約を守って使用してください。
     </aside>
   </main>
 
@@ -449,6 +509,7 @@
     const infoEndpoint = 'https://video.piloton.cc/youtube/info';
     const redirectorBaseUrl = 'https://r.0cm.org/?url=';
     const ksyncBaseUrl = 'https://ksync.arcanescripts.com/custom/redir-url?videoUrl=';
+    const streamResolverBaseUrl = 'https://video.piloton.cc/stream?url=';
     const youtubeInput = document.getElementById('youtube-url');
     const createButton = document.getElementById('create-button');
     const clearButton = document.getElementById('clear-button');
@@ -460,7 +521,13 @@
     const resultList = document.getElementById('result-list');
     const copyAllMainButton = document.getElementById('copy-all-main');
     const copyAllKsyncButton = document.getElementById('copy-all-ksync');
-    const defaultInputMessage = 'YouTubeの公開動画URLまたはプレイリストURLを入力してください。';
+    const streamResult = document.getElementById('stream-result');
+    const streamServiceName = document.getElementById('stream-service-name');
+    const streamResultUrl = document.getElementById('stream-result-url');
+    const copyStreamButton = document.getElementById('copy-stream-button');
+    const streamPlayerLink = document.getElementById('stream-player-link');
+    const streamResultMessage = document.getElementById('stream-result-message');
+    const defaultInputMessage = 'HTTPSの動画・プレイリスト・配信URLを入力してください。';
     const allowedYouTubeHosts = new Set([
       'youtube.com',
       'www.youtube.com',
@@ -513,10 +580,55 @@
       return { sourceUrl, mainUrl, ksyncUrl };
     };
 
+    const hostMatches = (host, root) => host === root || host.endsWith(`.${root}`);
+
+    const identifyStreamService = (host) => {
+      const services = [
+        [['nicovideo.jp'], 'ニコニコ動画'],
+        [['x.com', 'twitter.com'], 'X / Twitter'],
+        [['tiktok.com'], 'TikTok'],
+        [['mellow-fan.com', 'openrec.tv'], 'mellow-fan / OPENREC'],
+        [['twitcasting.tv'], 'ツイキャス'],
+        [['abema.tv'], 'Abema'],
+        [['tver.jp'], 'TVer'],
+        [['piapro.jp'], 'piapro'],
+        [['soundcloud.com'], 'SoundCloud'],
+        [['video.fc2.com'], 'FC2動画']
+      ];
+      const match = services.find(([roots]) => roots.some((root) => hostMatches(host, root)));
+      return match ? match[1] : null;
+    };
+
+    const buildStreamLink = (value) => {
+      let source;
+      try {
+        source = new URL(value);
+      } catch {
+        return { error: 'HTTPSで始まる正しいURLを入力してください。' };
+      }
+      if (source.protocol !== 'https:' || source.username || source.password || source.port) {
+        return { error: 'HTTPSで始まる正しいURLを入力してください。' };
+      }
+
+      const host = source.hostname.toLowerCase();
+      const service = identifyStreamService(host);
+      if (service === 'ニコニコ動画' && !/^\/watch\/((?:(?:sm|so|nm|nl)\d+|\d+))\/?$/i.test(source.pathname)) {
+        return { error: 'ニコニコ動画は /watch/sm... 形式の動画URLを入力してください。' };
+      }
+      const directMedia = /\.(?:mp4|webm|m4v|mov|m3u8|mpd|mp3|m4a|aac|ogg|wav|jpe?g|png|gif|webp|avif)$/i.test(source.pathname);
+      if (!service && !directMedia) {
+        return { error: '現在、このサイトまたはURL形式には対応していません。' };
+      }
+      return {
+        service: service || '動画・画像の直接URL',
+        url: `${streamResolverBaseUrl}${encodeURIComponent(source.href)}`
+      };
+    };
+
     const setBusy = (busy) => {
       youtubeInput.disabled = busy;
       createButton.disabled = busy;
-      createButton.textContent = busy ? '取得中…' : '一覧を変換';
+      createButton.textContent = busy ? '取得中…' : '変換';
       clearButton.disabled = busy || youtubeInput.value.length === 0;
     };
 
@@ -527,6 +639,9 @@
       resultMessage.textContent = '';
       resultMessage.className = 'message';
       results.hidden = true;
+      streamResult.hidden = true;
+      streamResultUrl.value = '';
+      streamPlayerLink.href = 'vrchat-player-test.html';
     };
 
     const copyText = async (text, messageElement, successMessage) => {
@@ -645,13 +760,29 @@
       return 'タイトルやプレイリストを取得できません。少し待ってからもう一度お試しください。';
     };
 
+    const renderStreamResult = (converted) => {
+      streamServiceName.textContent = converted.service;
+      streamResultUrl.value = converted.url;
+      streamPlayerLink.href = `vrchat-player-test.html?url=${encodeURIComponent(converted.url)}`;
+      streamResultMessage.textContent = 'リンクを作成しました。VRChatではLive / Streamモードで使用してください。';
+      streamResultMessage.className = 'message success';
+      streamResult.hidden = false;
+      inputMessage.textContent = `${converted.service}用のリンクを作成しました。`;
+      inputMessage.className = 'message success';
+    };
+
     const createListing = async () => {
       const value = youtubeInput.value.trim();
       const parsed = parseYouTubeUrl(value);
       clearResults();
       if (!parsed) {
-        inputMessage.textContent = 'HTTPSのYouTube動画またはプレイリストURLを入力してください。';
-        inputMessage.className = 'message error';
+        const converted = buildStreamLink(value);
+        if (converted.error) {
+          inputMessage.textContent = converted.error;
+          inputMessage.className = 'message error';
+          return;
+        }
+        renderStreamResult(converted);
         return;
       }
 
@@ -726,11 +857,23 @@
     clearButton.addEventListener('click', clearTool);
     copyAllMainButton.addEventListener('click', () => copyAll('mainUrl', 'メインリンク'));
     copyAllKsyncButton.addEventListener('click', () => copyAll('ksyncUrl', 'Ksync予備リンク'));
+    copyStreamButton.addEventListener('click', () => copyText(
+      streamResultUrl.value,
+      streamResultMessage,
+      'VRChat用リンクをコピーしました。'
+    ));
     youtubeInput.addEventListener('input', () => {
       clearButton.disabled = youtubeInput.value.length === 0;
     });
     youtubeInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') createListing();
+    });
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const supplied = new URLSearchParams(window.location.search).get('url');
+      if (!supplied) return;
+      youtubeInput.value = supplied;
+      clearButton.disabled = false;
     });
   </script>
 </body>
