@@ -9,6 +9,7 @@ import re
 import sys
 import threading
 import time
+import zlib
 from collections import defaultdict, deque
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -891,7 +892,8 @@ def _encode_stream_token(upstream_url: str, domand_cookie: str) -> str:
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    compressed = zlib.compress(payload, level=9)
+    return "z" + base64.urlsafe_b64encode(compressed).decode().rstrip("=")
 
 
 def _validate_niconico_upstream_url(value: str) -> str:
@@ -923,9 +925,19 @@ def _decode_stream_token(token: str) -> tuple[str, str]:
         raise HTTPException(status_code=400, detail="Invalid stream token")
 
     try:
-        padding = "=" * (-len(token) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(token + padding))
-    except (ValueError, json.JSONDecodeError) as error:
+        if token.startswith("z"):
+            encoded = token[1:]
+            padding = "=" * (-len(encoded) % 4)
+            compressed = base64.urlsafe_b64decode(encoded + padding)
+            decompressor = zlib.decompressobj()
+            decoded = decompressor.decompress(compressed, 20001)
+            if len(decoded) > 20000 or decompressor.unconsumed_tail or not decompressor.eof:
+                raise ValueError("Invalid compressed stream token")
+        else:
+            padding = "=" * (-len(token) % 4)
+            decoded = base64.urlsafe_b64decode(token + padding)
+        payload = json.loads(decoded)
+    except (ValueError, zlib.error, json.JSONDecodeError) as error:
         raise HTTPException(status_code=400, detail="Invalid stream token") from error
 
     if not isinstance(payload, list) or len(payload) != 3:
