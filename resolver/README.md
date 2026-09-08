@@ -2,11 +2,11 @@
 
 `vrchat-youtube.html` の公開YouTube動画URL転送、`vrchat-stream.html` の独自Stream変換、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当するバックエンドです。ニコニコ動画は分離された映像と音声を音声付きMP4へリアルタイム結合します。TVerは映像・音声の各HLS断片を1本のMPEG-TSへリアルタイム結合し、VRChatが音声を含む単一トラックとして再生できるようにします。複数の映像・音声候補を含むHLSは、VRChat向けに720p以下の1組へ整理します。ABEMAの専用暗号鍵は期限付きHTTPS URLへ変換し、SoundCloudは単曲URLの直接MP3だけを短時間で解決します。
 
-## DockHostingで無料運用
+## VPS運用（推奨）
 
-GitHubリポジトリ `Piloton1231/piloton-site` を選択し、Runtimeを `Dockerfile`、Root Directoryを `resolver`、App Portを `8000` にします。データベースは不要です。
+Ubuntu 24.04 LTS、2 GB RAM以上、固定IPv4、Docker Compose対応のVPSを使います。動画本体を中継する経路があるため、月間転送量は1 TB以上を推奨します。
 
-Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` から映像・音声一体型MP4の一時的な `googlevideo.com` URLへ直接転送します。`PORT` はDockHostingから自動設定されます。
+Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` から映像・音声一体型MP4の一時的な `googlevideo.com` URLへ直接転送します。CaddyがHTTPS証明書と長時間ストリームのリバースプロキシを担当します。
 
 ## Vercelで無料運用
 
@@ -48,16 +48,16 @@ YouTubeの直接転送に成功した応答は、既定で180秒間Vercel CDNへ
 
 ## 設置
 
-1. 固定グローバルIPを持つ小型Linuxサーバーを用意し、DockerとDocker Composeをインストールします。
+1. 固定グローバルIPv4を持つUbuntu 24.04 VPSを用意し、Docker EngineとDocker Composeをインストールします。
 2. PorkbunのDNSで `video.piloton.cc` のAレコードをサーバーのIPv4アドレスへ向けます。
 3. この `resolver` ディレクトリをサーバーへ配置します。
-4. 必要なら `.env.example` を `.env` にコピーしてドメインを変更します。
+4. `.env.example` を `.env` にコピーし、固定ISPプロキシを使う場合だけ `YOUTUBE_PROXY_URL` を設定します。実際の認証情報はGitHubへ保存しません。
 5. `docker compose up -d --build` を実行します。
 6. `https://video.piloton.cc/health` が `{"status":"ok"}` を返すことを確認します。
 
 Vercelを利用する場合、上記のVPS向け手順は不要です。
 
-CaddyがHTTPS証明書を自動取得するため、サーバーのTCP 80番・443番ポートを公開する必要があります。サーバー管理画面やSSHは一般公開せず、OSとコンテナを定期的に更新してください。
+CaddyがHTTPS証明書を自動取得するため、サーバーのTCP 80番・443番ポートを公開する必要があります。SSHは公開鍵認証を使い、パスワードログインとrootの直接ログインは初期設定後に無効化してください。OSとコンテナも定期的に更新します。
 
 ## 更新
 

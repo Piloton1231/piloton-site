@@ -1,21 +1,44 @@
+name: piloton-video
+
 services:
   resolver:
     build: .
     restart: unless-stopped
+    init: true
     environment:
-      CACHE_SECONDS: "180"
-      RATE_LIMIT: "12"
-      RATE_WINDOW_SECONDS: "60"
-      MAX_CONCURRENT_EXTRACTS: "2"
-      PLAYER_CLIENT: "android_vr"
+      CACHE_SECONDS: ${CACHE_SECONDS:-180}
+      EDGE_CACHE_SECONDS: ${EDGE_CACHE_SECONDS:-180}
+      STREAM_EDGE_CACHE_SECONDS: ${STREAM_EDGE_CACHE_SECONDS:-20}
+      RATE_LIMIT: ${RATE_LIMIT:-12}
+      RATE_WINDOW_SECONDS: ${RATE_WINDOW_SECONDS:-60}
+      MAX_CONCURRENT_EXTRACTS: ${MAX_CONCURRENT_EXTRACTS:-2}
+      PLAYER_CLIENTS: ${PLAYER_CLIENTS:-web_embedded,mweb,android_vr}
+      PLAYER_TEST_PREVIEW_SECONDS: ${PLAYER_TEST_PREVIEW_SECONDS:-12}
+      YOUTUBE_PROXY_URL: ${YOUTUBE_PROXY_URL:-}
     expose:
       - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
     depends_on:
-      - resolver
+      resolver:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"
@@ -25,6 +48,11 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   caddy_data:

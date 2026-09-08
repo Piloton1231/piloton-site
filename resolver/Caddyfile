@@ -8,10 +8,9 @@
     -Server
   }
 
-  @allowed path /resolve /health
-  handle @allowed {
-    reverse_proxy resolver:8000
+  reverse_proxy resolver:8000 {
+    # Send live media to VRChat as soon as it arrives instead of waiting for a
+    # response buffer to fill.
+    flush_interval -1
   }
-
-  respond "Not found" 404
 }
