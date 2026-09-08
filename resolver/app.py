@@ -217,6 +217,10 @@ PLAYER_HLS_MEDIA_HOST_ROOTS = (
     "xnxx-cdn.com",
     "rutube.ru",
 )
+PLAYER_TEST_PREVIEW_SECONDS = max(
+    4,
+    min(30, int(os.getenv("PLAYER_TEST_PREVIEW_SECONDS", "12"))),
+)
 TIKTOK_FORMAT_SELECTOR = os.getenv(
     "TIKTOK_FORMAT_SELECTOR",
     "best[ext=mp4][vcodec^=h264][acodec!=none][height<=?1280]/"
@@ -1848,7 +1852,37 @@ def _create_player_hls_manifest(upstream_url: str) -> str:
         raise ValueError("The site returned an invalid HLS manifest") from error
     if not manifest.startswith("#EXTM3U"):
         raise ValueError("The site returned an invalid HLS manifest")
-    return _rewrite_player_hls_manifest(manifest, final_url)
+    return _rewrite_player_hls_manifest(_trim_player_hls_manifest(manifest), final_url)
+
+
+def _trim_player_hls_manifest(manifest: str) -> str:
+    lines = manifest.splitlines()
+    if any(line.startswith("#EXT-X-STREAM-INF:") for line in lines):
+        return manifest
+
+    trimmed = []
+    duration = 0.0
+    segment_count = 0
+    pending_duration: float | None = None
+    for line in lines:
+        if line.startswith("#EXT-X-ENDLIST"):
+            continue
+        if line.startswith("#EXTINF:"):
+            if segment_count and duration >= PLAYER_TEST_PREVIEW_SECONDS:
+                break
+            match = re.match(r"#EXTINF:([0-9]+(?:\.[0-9]+)?)", line)
+            pending_duration = float(match.group(1)) if match else 0.0
+        trimmed.append(line)
+        if line.strip() and not line.startswith("#") and pending_duration is not None:
+            duration += pending_duration
+            pending_duration = None
+            segment_count += 1
+            if duration >= PLAYER_TEST_PREVIEW_SECONDS:
+                break
+
+    if segment_count:
+        trimmed.append("#EXT-X-ENDLIST")
+    return "\n".join(trimmed) + "\n"
 
 
 def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, str]:
@@ -3111,7 +3145,10 @@ async def _proxy_player_hls_response(request: Request, token: str) -> Response:
             manifest = body.decode("utf-8")
         except UnicodeDecodeError as error:
             raise HTTPException(status_code=502, detail="Invalid Player Test manifest") from error
-        body = _rewrite_player_hls_manifest(manifest, final_url).encode()
+        body = _rewrite_player_hls_manifest(
+            _trim_player_hls_manifest(manifest),
+            final_url,
+        ).encode()
         status_code = 200
 
     return Response(

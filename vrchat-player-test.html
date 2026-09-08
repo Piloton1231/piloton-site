@@ -342,7 +342,7 @@
           <span class="eyebrow">VRChat-like playback check</span>
           <h1><span class="gradient-title">Player Test</span><br>再生確認</h1>
         </div>
-        <p class="tester-copy">YouTubeや対応サイトのURLをPiloton用URLへ変換し、通常動画・音声・Live / Stream向けHLSを自動判定して再生します。</p>
+        <p class="tester-copy">YouTubeや対応サイトのURLをPiloton用URLへ変換し、通常動画・音声・Live / Stream向けHLSを最大約12秒だけ再生確認します。</p>
       </div>
 
       <section class="glass-card control-card" aria-label="再生URL入力">
@@ -395,7 +395,7 @@
       </section>
 
       <aside class="caution">
-        このページはVRChat風の一次確認用です。ブラウザとVRChatのAVPro Videoは別の再生機能なので、ここで再生できてもVRChatでの完全な動作を保証するものではありません。VRChatではAllow Untrusted URLsを有効にし、配信URLはLive / Streamモードで試してください。
+        転送量を抑えるため、再生確認は最大約12秒で停止します。VRChat用リンク本体の再生時間は制限されません。ブラウザとVRChatのAVPro Videoは別の再生機能なので、ここで再生できてもVRChatでの完全な動作を保証するものではありません。VRChatではAllow Untrusted URLsを有効にし、配信URLはLive / Streamモードで試してください。
       </aside>
     </section>
   </main>
@@ -428,6 +428,7 @@
     let lastError = '';
     let audioTimer = null;
     let activePlaybackUrl = '';
+    const previewSeconds = 12;
 
     const youtubeHosts = new Set([
       'youtube.com',
@@ -705,8 +706,8 @@
         hls = new window.Hls({
           enableWorker: true,
           lowLatencyMode: true,
-          backBufferLength: 30,
-          maxBufferLength: 30
+          backBufferLength: 0,
+          maxBufferLength: previewSeconds
         });
         hls.on(window.Hls.Events.ERROR, (_event, data) => {
           eventValue.textContent = `hls:${data.details || data.type}`;
@@ -821,6 +822,14 @@
     video.addEventListener('timeupdate', () => {
       timeValue.textContent = formatTime(video.currentTime);
       updateAudioStatus();
+      if (video.currentTime >= previewSeconds && !video.paused) {
+        video.pause();
+        eventValue.textContent = 'preview ended';
+        setChip(connectionStatus, '確認 完了', 'good');
+        detailMessage.textContent = '約12秒の再生確認が完了しました。VRChat用リンク本体には時間制限はありません。';
+        inputMessage.textContent = '確認用プレビューを終了しました。';
+        inputMessage.className = 'input-message success';
+      }
     });
     video.addEventListener('volumechange', () => {
       volumeValue.textContent = video.muted ? 'MUTED' : `${Math.round(video.volume * 100)}% / ON`;
