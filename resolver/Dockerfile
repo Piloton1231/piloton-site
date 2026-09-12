@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 USER root
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends python3 python3-venv ca-certificates \
+    && apt-get install --yes --no-install-recommends python3 python3-venv ca-certificates ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 resolver \
     && python3 -m venv /opt/venv

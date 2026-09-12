@@ -2,6 +2,7 @@ import asyncio
 import base64
 import html
 import http.cookiejar
+from http.client import IncompleteRead
 import ipaddress
 import itertools
 import json
@@ -183,6 +184,14 @@ STREAM_EXTRACT_TIMEOUT_SECONDS = max(
     10, min(90, int(os.getenv("STREAM_EXTRACT_TIMEOUT_SECONDS", "35")))
 )
 STREAM_TOKEN_SECONDS = max(60, min(3600, int(os.getenv("STREAM_TOKEN_SECONDS", "1800"))))
+ABEMA_TOKEN_SECONDS = max(
+    3600,
+    min(21600, int(os.getenv("ABEMA_TOKEN_SECONDS", "14400"))),
+)
+STREAM_RESOURCE_ATTEMPTS = max(
+    1,
+    min(5, int(os.getenv("STREAM_RESOURCE_ATTEMPTS", "3"))),
+)
 STREAM_MANIFEST_MAX_BYTES = max(
     65536, min(2_000_000, int(os.getenv("STREAM_MANIFEST_MAX_BYTES", "1000000")))
 )
@@ -1154,6 +1163,14 @@ def _single_tver_segment_manifest(segment: dict) -> str:
     return "\n".join(result) + "\n"
 
 
+def _ffmpeg_executable() -> str:
+    configured = os.getenv("FFMPEG_EXE", "").strip()
+    if configured:
+        return configured
+    system_ffmpeg = Path("/usr/bin/ffmpeg")
+    return str(system_ffmpeg) if system_ffmpeg.is_file() else get_ffmpeg_exe()
+
+
 def _mux_tver_segment(video_segment: dict, audio_segment: dict) -> bytes:
     video_manifest = _single_tver_segment_manifest(video_segment)
     audio_manifest = _single_tver_segment_manifest(audio_segment)
@@ -1163,7 +1180,7 @@ def _mux_tver_segment(video_segment: dict, audio_segment: dict) -> bytes:
         video_path.write_text(video_manifest, encoding="utf-8")
         audio_path.write_text(audio_manifest, encoding="utf-8")
         command = [
-            get_ffmpeg_exe(),
+            _ffmpeg_executable(),
             "-nostdin",
             "-hide_banner",
             "-loglevel",
@@ -1227,7 +1244,7 @@ def _encode_abema_key_token(key: bytes) -> str:
     if len(key) != 16:
         raise ValueError("ABEMA returned an invalid video key")
     payload = json.dumps(
-        [key.hex(), int(time.time()) + STREAM_TOKEN_SECONDS],
+        [key.hex(), int(time.time()) + ABEMA_TOKEN_SECONDS],
         separators=(",", ":"),
     ).encode()
     return base64.urlsafe_b64encode(payload).decode().rstrip("=")
@@ -1249,7 +1266,7 @@ def _decode_abema_key_token(token: str) -> bytes:
         or not re.fullmatch(r"[0-9a-f]{32}", key_hex)
         or not isinstance(expires_at, int)
         or expires_at < int(time.time())
-        or expires_at > int(time.time()) + 3600
+        or expires_at > int(time.time()) + ABEMA_TOKEN_SECONDS
     ):
         raise HTTPException(status_code=400, detail="Expired or invalid video key token")
     return bytes.fromhex(key_hex)
@@ -1266,7 +1283,7 @@ def _validate_abema_upstream_url(value: str) -> str:
 
 def _encode_abema_stream_token(upstream_url: str) -> str:
     payload = json.dumps(
-        [_validate_abema_upstream_url(upstream_url), int(time.time()) + STREAM_TOKEN_SECONDS],
+        [_validate_abema_upstream_url(upstream_url), int(time.time()) + ABEMA_TOKEN_SECONDS],
         separators=(",", ":"),
     ).encode()
     return base64.urlsafe_b64encode(payload).decode().rstrip("=")
@@ -1287,7 +1304,7 @@ def _decode_abema_stream_token(token: str) -> str:
         not isinstance(upstream_url, str)
         or not isinstance(expires_at, int)
         or expires_at < int(time.time())
-        or expires_at > int(time.time()) + 3600
+        or expires_at > int(time.time()) + ABEMA_TOKEN_SECONDS
     ):
         raise HTTPException(status_code=400, detail="Expired or invalid ABEMA stream token")
     try:
@@ -2234,34 +2251,40 @@ def _read_tver_resource(
     request_headers = {"User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]}
     if range_header and re.fullmatch(r"bytes=(?:\d+-\d*|-\d+)", range_header):
         request_headers["Range"] = range_header
-
-    request = UrlRequest(
-        _validate_tver_upstream_url(upstream_url),
-        headers=request_headers,
-        method="GET",
-    )
+    validated_url = _validate_tver_upstream_url(upstream_url)
     opener = (
         build_opener(ProxyHandler({"http": JAPAN_PROXY_URL, "https": JAPAN_PROXY_URL}))
         if JAPAN_PROXY_URL
         else build_opener()
     )
-    with opener.open(request, timeout=25) as response:
-        final_url = _validate_tver_upstream_url(response.geturl())
-        content_type = response.headers.get("Content-Type", "application/octet-stream")
-        is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
-        max_bytes = STREAM_MANIFEST_MAX_BYTES if is_manifest else STREAM_MEDIA_MAX_BYTES
-        content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > max_bytes:
-            raise ValueError("TVer stream response is too large")
-        body = response.read(max_bytes + 1)
-        if len(body) > max_bytes:
-            raise ValueError("TVer stream response is too large")
-        forwarded_headers = {
-            name: response.headers[name]
-            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
-            if response.headers.get(name)
-        }
-        return body, response.status, content_type, forwarded_headers, final_url
+    for attempt in range(STREAM_RESOURCE_ATTEMPTS):
+        request = UrlRequest(validated_url, headers=request_headers, method="GET")
+        try:
+            with opener.open(request, timeout=25) as response:
+                final_url = _validate_tver_upstream_url(response.geturl())
+                content_type = response.headers.get("Content-Type", "application/octet-stream")
+                is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
+                max_bytes = STREAM_MANIFEST_MAX_BYTES if is_manifest else STREAM_MEDIA_MAX_BYTES
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > max_bytes:
+                    raise ValueError("TVer stream response is too large")
+                body = response.read(max_bytes + 1)
+                if len(body) > max_bytes:
+                    raise ValueError("TVer stream response is too large")
+                forwarded_headers = {
+                    name: response.headers[name]
+                    for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+                    if response.headers.get(name)
+                }
+                return body, response.status, content_type, forwarded_headers, final_url
+        except HTTPError as error:
+            if error.code not in {408, 425, 429, 500, 502, 503, 504} or attempt + 1 >= STREAM_RESOURCE_ATTEMPTS:
+                raise
+        except (URLError, TimeoutError, OSError, IncompleteRead):
+            if attempt + 1 >= STREAM_RESOURCE_ATTEMPTS:
+                raise
+        time.sleep(0.2 * (2**attempt))
+    raise URLError("TVer stream request failed")
 
 
 def _read_abema_resource(
@@ -2271,31 +2294,38 @@ def _read_abema_resource(
     request_headers = {"User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]}
     if range_header and re.fullmatch(r"bytes=(?:\d+-\d*|-\d+)", range_header):
         request_headers["Range"] = range_header
-    request = UrlRequest(
-        _validate_abema_upstream_url(upstream_url),
-        headers=request_headers,
-        method="GET",
-    )
+    validated_url = _validate_abema_upstream_url(upstream_url)
     opener = (
         build_opener(ProxyHandler({"http": JAPAN_PROXY_URL, "https": JAPAN_PROXY_URL}))
         if JAPAN_PROXY_URL
         else build_opener()
     )
-    with opener.open(request, timeout=25) as response:
-        _validate_abema_upstream_url(response.geturl())
-        content_type = response.headers.get("Content-Type", "video/mp2t")
-        content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > STREAM_MEDIA_MAX_BYTES:
-            raise ValueError("ABEMA stream response is too large")
-        body = response.read(STREAM_MEDIA_MAX_BYTES + 1)
-        if len(body) > STREAM_MEDIA_MAX_BYTES:
-            raise ValueError("ABEMA stream response is too large")
-        forwarded_headers = {
-            name: response.headers[name]
-            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
-            if response.headers.get(name)
-        }
-        return body, response.status, content_type, forwarded_headers
+    for attempt in range(STREAM_RESOURCE_ATTEMPTS):
+        request = UrlRequest(validated_url, headers=request_headers, method="GET")
+        try:
+            with opener.open(request, timeout=25) as response:
+                _validate_abema_upstream_url(response.geturl())
+                content_type = response.headers.get("Content-Type", "video/mp2t")
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > STREAM_MEDIA_MAX_BYTES:
+                    raise ValueError("ABEMA stream response is too large")
+                body = response.read(STREAM_MEDIA_MAX_BYTES + 1)
+                if len(body) > STREAM_MEDIA_MAX_BYTES:
+                    raise ValueError("ABEMA stream response is too large")
+                forwarded_headers = {
+                    name: response.headers[name]
+                    for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+                    if response.headers.get(name)
+                }
+                return body, response.status, content_type, forwarded_headers
+        except HTTPError as error:
+            if error.code not in {408, 425, 429, 500, 502, 503, 504} or attempt + 1 >= STREAM_RESOURCE_ATTEMPTS:
+                raise
+        except (URLError, TimeoutError, OSError, IncompleteRead):
+            if attempt + 1 >= STREAM_RESOURCE_ATTEMPTS:
+                raise
+        time.sleep(0.2 * (2**attempt))
+    raise URLError("ABEMA stream request failed")
 
 
 def _create_niconico_session(video_id: str) -> tuple[str, str]:
@@ -2411,7 +2441,7 @@ def _start_niconico_mux_process(master_url: str, domand_cookie: str) -> subproce
     if not STREAM_COOKIE_PATTERN.fullmatch(domand_cookie):
         raise ValueError("Invalid NicoNico stream cookie")
     command = [
-        get_ffmpeg_exe(),
+        _ffmpeg_executable(),
         "-nostdin",
         "-hide_banner",
         "-loglevel",
@@ -2948,7 +2978,7 @@ async def _proxy_abema_media_response(request: Request, token: str) -> Response:
         print(f"ABEMA media returned HTTP {error.code}", file=sys.stderr, flush=True)
         status = 410 if error.code in {401, 403, 404} else 502
         raise HTTPException(status_code=status, detail="The ABEMA stream has expired") from error
-    except (URLError, TimeoutError, ValueError, OSError) as error:
+    except (URLError, TimeoutError, ValueError, OSError, IncompleteRead) as error:
         print(f"ABEMA media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not read the ABEMA stream") from error
 
@@ -3022,7 +3052,7 @@ async def _proxy_tver_media_response(request: Request, token: str) -> Response:
         print(f"TVer media returned HTTP {error.code}", file=sys.stderr, flush=True)
         status = 410 if error.code in {401, 403, 404} else 502
         raise HTTPException(status_code=status, detail="The TVer stream has expired") from error
-    except (URLError, TimeoutError, ValueError, OSError) as error:
+    except (URLError, TimeoutError, ValueError, OSError, IncompleteRead) as error:
         print(f"TVer media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not read the TVer stream") from error
 
