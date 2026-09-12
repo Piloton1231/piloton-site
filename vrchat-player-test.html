@@ -493,6 +493,15 @@
       return messages[error.code] || '原因不明の再生エラーです。';
     };
 
+    const friendlyResolverError = (detail) => {
+      const messages = {
+        'This content is only available from Japan': 'この配信は日本国内からのみ取得できます。現在の配信サーバーには日本経路が必要です。',
+        'This content requires a login or paid subscription': 'ログインまたは有料契約が必要な動画は再生できません。',
+        'The site did not provide a VRChat-compatible stream': '配信元からVRChatで再生できる映像・音声一体型データを取得できませんでした。'
+      };
+      return messages[detail] || detail;
+    };
+
     const normalizePlaybackUrl = (value) => {
       let parsed;
       try {
@@ -591,7 +600,7 @@
         } catch {
           // Keep the friendly fallback message.
         }
-        throw new Error(detail);
+        throw new Error(friendlyResolverError(detail));
       }
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
       const resolvedUrl = response.url || playbackUrl;
@@ -681,14 +690,20 @@
       copyResultButton.disabled = false;
       video.muted = false;
       video.volume = 1;
+      startButton.disabled = true;
+      startButton.textContent = '変換中…';
 
       let resolvedPlayback;
       try {
         resolvedPlayback = await resolvePlaybackTarget(playbackUrl);
       } catch (error) {
         showError(error instanceof Error ? error.message : '変換先の動画を取得できませんでした。');
+        startButton.disabled = false;
+        startButton.textContent = '変換して再生';
         return;
       }
+      startButton.disabled = false;
+      startButton.textContent = '変換して再生';
       const mediaUrl = resolvedPlayback.playbackUrl;
       const useHls = resolvedPlayback.useHls;
       if (useHls && video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -873,8 +888,9 @@
         if (parsed.protocol !== 'https:') return;
         playbackInput.value = parsed.href;
         clearButton.disabled = false;
-        inputMessage.textContent = 'URLを受け取りました。「変換して再生」を押してください。';
+        inputMessage.textContent = 'URLを受け取りました。自動で変換を開始します…';
         inputMessage.className = 'input-message success';
+        window.setTimeout(beginPlayback, 0);
       } catch {
         // Ignore malformed query values.
       }

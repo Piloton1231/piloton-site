@@ -1726,7 +1726,14 @@ def _read_pornhub_resource(
         },
         method="GET",
     )
-    opener = build_opener()
+    # Pornhub binds its temporary media URL to the same residential exit that
+    # opened the watch page.  Fetching the page through the proxy and the media
+    # directly from the VPS produces HTTP 474/403 responses.
+    opener = (
+        build_opener(ProxyHandler({"http": YOUTUBE_PROXY_URL, "https": YOUTUBE_PROXY_URL}))
+        if YOUTUBE_PROXY_URL
+        else build_opener()
+    )
     with opener.open(request, timeout=25) as response:
         _validate_pornhub_media_url(response.geturl())
         content_type = response.headers.get("Content-Type", "video/mp4")
@@ -1929,7 +1936,7 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
                 "extract_flat": "discard_in_playlist",
             }
         )
-    if (is_rule34video or is_rule34xxx) and YOUTUBE_PROXY_URL:
+    if (is_rule34video or is_rule34xxx or is_pornhub) and YOUTUBE_PROXY_URL:
         options["proxy"] = YOUTUBE_PROXY_URL
     if JS_RUNTIME:
         runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
@@ -2805,6 +2812,12 @@ async def resolve_stream(
         detail = (
             "This content requires a login or paid subscription"
             if "subscription" in message or "login" in message or "cookies" in message
+            else "This content is only available from Japan"
+            if (
+                "geo restriction" in message
+                or "available in japan" in message
+                or "not available from your location" in message
+            )
             else "The site did not provide a VRChat-compatible stream"
         )
         raise HTTPException(
