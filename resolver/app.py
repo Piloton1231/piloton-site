@@ -266,6 +266,15 @@ _redgifs_token: tuple[float, str] | None = None
 _redgifs_token_lock = threading.Lock()
 
 
+@app.get("/", include_in_schema=False)
+async def service_home() -> RedirectResponse:
+    return RedirectResponse(
+        "https://piloton.cc/vrchat-youtube.html",
+        status_code=307,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def _direct_redirect_headers() -> dict[str, str]:
     headers = {
         "Cache-Control": "no-store",
