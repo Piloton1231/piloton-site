@@ -196,6 +196,13 @@ TVER_MAX_HEIGHT = max(
     360,
     min(720, int(os.getenv("TVER_MAX_HEIGHT", "540"))),
 )
+TVER_TRAILING_SEGMENT_TOLERANCE_SECONDS = max(
+    0.1,
+    min(
+        3.0,
+        float(os.getenv("TVER_TRAILING_SEGMENT_TOLERANCE_SECONDS", "1.5")),
+    ),
+)
 STREAM_MANIFEST_MAX_BYTES = max(
     65536, min(2_000_000, int(os.getenv("STREAM_MANIFEST_MAX_BYTES", "1000000")))
 )
@@ -1127,7 +1134,8 @@ def _create_tver_muxed_playlist(master_url: str) -> str:
         )
         if (
             not common_count
-            or max(video_tail_duration, audio_tail_duration) > 1.0
+            or max(video_tail_duration, audio_tail_duration)
+            > TVER_TRAILING_SEGMENT_TOLERANCE_SECONDS
             or total_duration_difference > 1.0
         ):
             raise StreamCompatibilityError("TVer video and audio segments do not align")
