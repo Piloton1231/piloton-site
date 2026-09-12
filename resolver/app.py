@@ -1084,7 +1084,25 @@ def _create_tver_muxed_playlist(master_url: str) -> str:
     video_segments, video_target = _read_tver_track_manifest(video_url)
     audio_segments, audio_target = _read_tver_track_manifest(audio_url)
     if len(video_segments) != len(audio_segments):
-        raise StreamCompatibilityError("TVer video and audio segments do not align")
+        common_count = min(len(video_segments), len(audio_segments))
+        video_tail_duration = sum(
+            segment["duration"] for segment in video_segments[common_count:]
+        )
+        audio_tail_duration = sum(
+            segment["duration"] for segment in audio_segments[common_count:]
+        )
+        total_duration_difference = abs(
+            sum(segment["duration"] for segment in video_segments)
+            - sum(segment["duration"] for segment in audio_segments)
+        )
+        if (
+            not common_count
+            or max(video_tail_duration, audio_tail_duration) > 1.0
+            or total_duration_difference > 1.0
+        ):
+            raise StreamCompatibilityError("TVer video and audio segments do not align")
+        video_segments = video_segments[:common_count]
+        audio_segments = audio_segments[:common_count]
 
     target_duration = max(video_target, audio_target)
     result = [
