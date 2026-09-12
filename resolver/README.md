@@ -12,7 +12,7 @@ Docker版は同梱のPOトークンサーバーとyt-dlpを使い、`/resolve` �
 
 個人利用はVercelのHobbyプランを利用できます。VercelへGitHubでログインして `Piloton1231/piloton-site` をImportし、Root Directoryを `resolver` にしてデプロイします。FastAPIは自動検出され、日本限定配信を解析できるよう `vercel.json` により東京で実行されます。
 
-固定ISPプロキシを使う場合は、VercelのEnvironment Variablesへ `YOUTUBE_PROXY_URL` を `http://USER:PASS@HOST:PORT` 形式で登録します。この値はGitHubへ保存しません。`/health` の `proxyEnabled` が `true` なら設定済みです。
+固定ISPプロキシを使う場合は、VercelのEnvironment Variablesへ `YOUTUBE_PROXY_URL` を `http://USER:PASS@HOST:PORT` 形式で登録します。TVer・ABEMAには日本の固定ISPプロキシを `JAPAN_PROXY_URL` として別に登録します。解析から動画・音声断片まで同じ日本経路を使うための設定です。これらの値はGitHubへ保存しません。`/health` の `proxyEnabled` と `japanProxyEnabled` が `true` なら設定済みです。
 
 VercelではPython依存関係としてQuickJS-ngを導入し、同梱の `qjs` ラッパーでYouTubeの署名処理を実行します。`/health` の `jsRuntimeBundled` が `true` なら署名処理を利用できます。
 
@@ -51,7 +51,7 @@ YouTubeの直接転送に成功した応答は、既定で180秒間Vercel CDNへ
 1. 固定グローバルIPv4を持つUbuntu 24.04 VPSを用意し、Docker EngineとDocker Composeをインストールします。
 2. PorkbunのDNSで `video.piloton.cc` のAレコードをサーバーのIPv4アドレスへ向けます。
 3. この `resolver` ディレクトリをサーバーへ配置します。
-4. `.env.example` を `.env` にコピーし、固定ISPプロキシを使う場合だけ `YOUTUBE_PROXY_URL` を設定します。実際の認証情報はGitHubへ保存しません。
+4. `.env.example` を `.env` にコピーし、固定ISPプロキシを使う場合だけ `YOUTUBE_PROXY_URL` を設定します。TVer・ABEMAを使う場合は日本の固定ISPプロキシを `JAPAN_PROXY_URL` に設定します。実際の認証情報はGitHubへ保存しません。
 5. `docker compose up -d --build` を実行します。
 6. `https://video.piloton.cc/health` が `{"status":"ok"}` を返すことを確認します。
 

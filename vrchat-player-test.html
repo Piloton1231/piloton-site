@@ -428,7 +428,29 @@
     let lastError = '';
     let audioTimer = null;
     let activePlaybackUrl = '';
+    let previewPlayedMs = 0;
+    let previewClockStartedAt = null;
     const previewSeconds = 12;
+
+    const resetPreviewClock = () => {
+      previewPlayedMs = 0;
+      previewClockStartedAt = null;
+    };
+
+    const resumePreviewClock = () => {
+      if (previewClockStartedAt === null) previewClockStartedAt = performance.now();
+    };
+
+    const pausePreviewClock = () => {
+      if (previewClockStartedAt === null) return;
+      previewPlayedMs += performance.now() - previewClockStartedAt;
+      previewClockStartedAt = null;
+    };
+
+    const previewElapsedSeconds = () => (
+      previewPlayedMs
+      + (previewClockStartedAt === null ? 0 : performance.now() - previewClockStartedAt)
+    ) / 1000;
 
     const youtubeHosts = new Set([
       'youtube.com',
@@ -626,6 +648,7 @@
       video.pause();
       video.removeAttribute('src');
       video.load();
+      resetPreviewClock();
     };
 
     const showError = (message) => {
@@ -816,6 +839,7 @@
       updateAudioStatus();
     });
     video.addEventListener('playing', () => {
+      resumePreviewClock();
       overlay.hidden = true;
       eventValue.textContent = 'playing';
       setChip(connectionStatus, '再生中', 'good');
@@ -825,11 +849,13 @@
       detailMessage.textContent = 'ブラウザで再生中です。音が聞こえるか耳でも確認してください。';
     });
     video.addEventListener('waiting', () => {
+      pausePreviewClock();
       eventValue.textContent = 'waiting';
       setChip(connectionStatus, 'バッファ中', 'warn');
       detailMessage.textContent = '次のデータを待っています。長く続く場合は配信側の応答を確認してください。';
     });
     video.addEventListener('stalled', () => {
+      pausePreviewClock();
       eventValue.textContent = 'stalled';
       setChip(connectionStatus, '読み込み停滞', 'warn');
       detailMessage.textContent = 'データの読み込みが一時停止しています。';
@@ -837,7 +863,7 @@
     video.addEventListener('timeupdate', () => {
       timeValue.textContent = formatTime(video.currentTime);
       updateAudioStatus();
-      if (video.currentTime >= previewSeconds && !video.paused) {
+      if (previewElapsedSeconds() >= previewSeconds && !video.paused) {
         video.pause();
         eventValue.textContent = 'preview ended';
         setChip(connectionStatus, '確認 完了', 'good');
@@ -846,6 +872,8 @@
         inputMessage.className = 'input-message success';
       }
     });
+    video.addEventListener('pause', pausePreviewClock);
+    video.addEventListener('ended', pausePreviewClock);
     video.addEventListener('volumechange', () => {
       volumeValue.textContent = video.muted ? 'MUTED' : `${Math.round(video.volume * 100)}% / ON`;
     });

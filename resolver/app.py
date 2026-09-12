@@ -88,6 +88,7 @@ POT_PROVIDER = os.getenv("POT_PROVIDER", "0").lower() in {"1", "true", "yes"}
 POT_SERVER_URL = os.getenv("POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/")
 FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}
 YOUTUBE_PROXY_URL = os.getenv("YOUTUBE_PROXY_URL", "").strip()
+JAPAN_PROXY_URL = os.getenv("JAPAN_PROXY_URL", "").strip()
 CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
 EDGE_CACHE_SECONDS = max(0, int(os.getenv("EDGE_CACHE_SECONDS", str(CACHE_SECONDS))))
 STREAM_EDGE_CACHE_SECONDS = max(
@@ -195,6 +196,7 @@ ABEMA_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/abema/media"
 TVER_MASTER_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/master.m3u8?token="
 TVER_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tver/media"
 TVER_MUX_MEDIA_BASE_URL = "https://video.piloton.cc/stream/tver/mux.ts?token="
+TVER_INTERNAL_MEDIA_PROXY_BASE_URL = "http://127.0.0.1:8000/stream/tver/media"
 TIKTOK_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/tiktok/media.mp4?token="
 RULE34VIDEO_MEDIA_PROXY_BASE_URL = (
     "https://video.piloton.cc/stream/rule34video/media.mp4?token="
@@ -707,14 +709,19 @@ def _normalize_hls_audio_rendition(line: str) -> str:
     return line
 
 
-def _read_public_hls_manifest(value: str) -> tuple[str, str]:
+def _read_public_hls_manifest(value: str, proxy_url: str = "") -> tuple[str, str]:
     value = _validate_direct_media_url(value)
     request = UrlRequest(
         value,
         headers={"User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]},
         method="GET",
     )
-    with urlopen(request, timeout=25) as response:
+    opener = (
+        build_opener(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+        if proxy_url
+        else build_opener()
+    )
+    with opener.open(request, timeout=25) as response:
         final_url = _validate_direct_media_url(response.geturl())
         content_length = response.headers.get("Content-Length")
         if content_length and int(content_length) > STREAM_MANIFEST_MAX_BYTES:
@@ -731,8 +738,8 @@ def _read_public_hls_manifest(value: str) -> tuple[str, str]:
     return manifest, final_url
 
 
-def _simplify_public_hls_master(master_url: str) -> str:
-    manifest, final_url = _read_public_hls_manifest(master_url)
+def _simplify_public_hls_master(master_url: str, proxy_url: str = "") -> str:
+    manifest, final_url = _read_public_hls_manifest(master_url, proxy_url)
     lines = manifest.splitlines()
     audio_lines = {}
     variants = []
@@ -859,6 +866,14 @@ def _tver_proxy_url(upstream_url: str) -> str:
     return f"{TVER_MEDIA_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
 
 
+def _tver_internal_proxy_url(upstream_url: str) -> str:
+    token = _encode_tver_stream_token(upstream_url)
+    extension = Path(urlsplit(upstream_url).path).suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,8}", extension):
+        extension = ".bin"
+    return f"{TVER_INTERNAL_MEDIA_PROXY_BASE_URL}{extension}?token={quote(token, safe='')}"
+
+
 def _rewrite_tver_hls_manifest(manifest: str, base_url: str) -> str:
     def replace_uri(match: re.Match) -> str:
         absolute_url = _validate_tver_upstream_url(urljoin(base_url, match.group(1)))
@@ -889,12 +904,18 @@ def _create_tver_wrapper(master_url: str) -> str:
 
 
 def _create_tver_master(master_url: str) -> str:
-    simplified = _simplify_public_hls_master(_validate_tver_upstream_url(master_url))
+    simplified = _simplify_public_hls_master(
+        _validate_tver_upstream_url(master_url),
+        JAPAN_PROXY_URL,
+    )
     return _rewrite_tver_hls_manifest(simplified, master_url)
 
 
 def _select_tver_track_urls(master_url: str) -> tuple[str, str]:
-    simplified = _simplify_public_hls_master(_validate_tver_upstream_url(master_url))
+    simplified = _simplify_public_hls_master(
+        _validate_tver_upstream_url(master_url),
+        JAPAN_PROXY_URL,
+    )
     lines = simplified.splitlines()
     audio_line = next(
         (
@@ -1089,6 +1110,10 @@ def _create_tver_muxed_playlist(master_url: str) -> str:
 
 def _single_tver_segment_manifest(segment: dict) -> str:
     segment = _validate_tver_mux_segment(segment)
+    if JAPAN_PROXY_URL:
+        segment["url"] = _tver_internal_proxy_url(segment["url"])
+        if segment["key_url"]:
+            segment["key_url"] = _tver_internal_proxy_url(segment["key_url"])
     target_duration = max(1, int(segment["duration"] + 0.999999))
     result = [
         "#EXTM3U",
@@ -1295,7 +1320,7 @@ def _create_abema_manifest(downloader: YoutubeDL, info: dict) -> str:
     if not preferred:
         raise StreamCompatibilityError("ABEMA did not provide an HLS stream")
     selected = max(preferred, key=_stream_format_score)
-    manifest, final_url = _read_public_hls_manifest(selected["url"])
+    manifest, final_url = _read_public_hls_manifest(selected["url"], JAPAN_PROXY_URL)
 
     key_tokens = {}
 
@@ -1938,6 +1963,8 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
         )
     if (is_rule34video or is_rule34xxx or is_pornhub) and YOUTUBE_PROXY_URL:
         options["proxy"] = YOUTUBE_PROXY_URL
+    if (is_tver or is_abema) and JAPAN_PROXY_URL:
+        options["proxy"] = JAPAN_PROXY_URL
     if JS_RUNTIME:
         runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
         options["js_runtimes"] = {JS_RUNTIME: runtime_options}
@@ -2195,7 +2222,12 @@ def _read_tver_resource(
         headers=request_headers,
         method="GET",
     )
-    with urlopen(request, timeout=25) as response:
+    opener = (
+        build_opener(ProxyHandler({"http": JAPAN_PROXY_URL, "https": JAPAN_PROXY_URL}))
+        if JAPAN_PROXY_URL
+        else build_opener()
+    )
+    with opener.open(request, timeout=25) as response:
         final_url = _validate_tver_upstream_url(response.geturl())
         content_type = response.headers.get("Content-Type", "application/octet-stream")
         is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
@@ -2226,7 +2258,12 @@ def _read_abema_resource(
         headers=request_headers,
         method="GET",
     )
-    with urlopen(request, timeout=25) as response:
+    opener = (
+        build_opener(ProxyHandler({"http": JAPAN_PROXY_URL, "https": JAPAN_PROXY_URL}))
+        if JAPAN_PROXY_URL
+        else build_opener()
+    )
+    with opener.open(request, timeout=25) as response:
         _validate_abema_upstream_url(response.geturl())
         content_type = response.headers.get("Content-Type", "video/mp2t")
         content_length = response.headers.get("Content-Length")
@@ -2746,6 +2783,7 @@ async def health() -> dict[str, str | bool | int]:
     return {
         "status": "ok",
         "proxyEnabled": bool(YOUTUBE_PROXY_URL),
+        "japanProxyEnabled": bool(JAPAN_PROXY_URL),
         "jsRuntimeBundled": BUNDLED_JS_RUNTIME_PATH.is_file(),
         "edgeCacheSeconds": EDGE_CACHE_SECONDS,
         "streamEdgeCacheSeconds": STREAM_EDGE_CACHE_SECONDS,
