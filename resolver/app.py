@@ -192,6 +192,10 @@ STREAM_RESOURCE_ATTEMPTS = max(
     1,
     min(5, int(os.getenv("STREAM_RESOURCE_ATTEMPTS", "3"))),
 )
+TVER_MAX_HEIGHT = max(
+    360,
+    min(720, int(os.getenv("TVER_MAX_HEIGHT", "540"))),
+)
 STREAM_MANIFEST_MAX_BYTES = max(
     65536, min(2_000_000, int(os.getenv("STREAM_MANIFEST_MAX_BYTES", "1000000")))
 )
@@ -747,7 +751,11 @@ def _read_public_hls_manifest(value: str, proxy_url: str = "") -> tuple[str, str
     return manifest, final_url
 
 
-def _simplify_public_hls_master(master_url: str, proxy_url: str = "") -> str:
+def _simplify_public_hls_master(
+    master_url: str,
+    proxy_url: str = "",
+    max_height: int = 720,
+) -> str:
     manifest, final_url = _read_public_hls_manifest(master_url, proxy_url)
     lines = manifest.splitlines()
     audio_lines = {}
@@ -791,7 +799,9 @@ def _simplify_public_hls_master(master_url: str, proxy_url: str = "") -> str:
 
     if not variants:
         raise ValueError("The site did not return an HLS master playlist")
-    preferred = [variant for variant in variants if 0 < variant["height"] <= 720]
+    preferred = [
+        variant for variant in variants if 0 < variant["height"] <= max_height
+    ]
     if not preferred:
         preferred = variants
     selected = max(
@@ -916,6 +926,7 @@ def _create_tver_master(master_url: str) -> str:
     simplified = _simplify_public_hls_master(
         _validate_tver_upstream_url(master_url),
         JAPAN_PROXY_URL,
+        TVER_MAX_HEIGHT,
     )
     return _rewrite_tver_hls_manifest(simplified, master_url)
 
@@ -924,6 +935,7 @@ def _select_tver_track_urls(master_url: str) -> tuple[str, str]:
     simplified = _simplify_public_hls_master(
         _validate_tver_upstream_url(master_url),
         JAPAN_PROXY_URL,
+        TVER_MAX_HEIGHT,
     )
     lines = simplified.splitlines()
     audio_line = next(
