@@ -18,18 +18,18 @@ class StreamFeatureTests(unittest.TestCase):
                 {"url": "https://a.bilivideo.com/360.mp4", "protocol": "https", "ext": "mp4", "vcodec": "avc1", "acodec": "none", "height": 360},
                 {"url": "https://a.bilivideo.com/720.mp4", "protocol": "https", "ext": "mp4", "vcodec": "avc1", "acodec": "none", "height": 720},
                 {"url": "https://a.bilivideo.com/1080.mp4", "protocol": "https", "ext": "mp4", "vcodec": "avc1", "acodec": "none", "height": 1080},
-                {"url": "https://a.bilivideo.com/audio.m4a", "protocol": "https", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 128},
+                {"url": "https://upos-hz-mirrorakam.akamaized.net/audio.m4a", "protocol": "https", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 128},
             ]
         }
         mux_url = app._bilibili_mux_url(info, 720)
         token = parse_qs(urlsplit(mux_url).query)["token"][0]
         self.assertEqual(
             app._decode_bilibili_mux_token(token),
-            ("https://a.bilivideo.com/720.mp4", "https://a.bilivideo.com/audio.m4a"),
+            ("https://a.bilivideo.com/720.mp4", "https://upos-hz-mirrorakam.akamaized.net/audio.m4a"),
         )
         with self.assertRaises(ValueError):
             app._encode_bilibili_mux_token(
-                "https://example.com/video.mp4", "https://a.bilivideo.com/audio.m4a"
+                "https://example.com/video.mp4", "https://upos-hz-mirrorakam.akamaized.net/audio.m4a"
             )
 
     def test_pornhub_token_keeps_source_for_refresh(self):

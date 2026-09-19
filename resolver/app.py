@@ -1331,10 +1331,14 @@ def _mux_tver_segment(video_segment: dict, audio_segment: dict) -> bytes:
             "20000000",
             "-protocol_whitelist",
             "file,http,https,tcp,tls,crypto",
+            "-allowed_extensions",
+            "ALL",
             "-i",
             str(video_path),
             "-protocol_whitelist",
             "file,http,https,tcp,tls,crypto",
+            "-allowed_extensions",
+            "ALL",
             "-i",
             str(audio_path),
             "-map",
@@ -1384,7 +1388,10 @@ def _stream_format_score(stream_format: dict) -> tuple[int, int, int, float]:
 def _validate_bilibili_media_url(value: str) -> str:
     value = _validate_direct_media_url(value)
     host = (urlsplit(value).hostname or "").lower().rstrip(".")
-    if not any(_host_matches(host, root) for root in BILIBILI_MEDIA_HOST_ROOTS):
+    if not (
+        any(_host_matches(host, root) for root in BILIBILI_MEDIA_HOST_ROOTS)
+        or (host.startswith("upos-") and host.endswith(".akamaized.net"))
+    ):
         raise ValueError("Unexpected Bilibili media host")
     return value
 
