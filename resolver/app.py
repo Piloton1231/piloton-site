@@ -296,6 +296,7 @@ _media_inflight: dict[str, threading.Event] = {}
 MEDIA_CACHE_MAX_BYTES = 48_000_000
 _pornhub_refresh_cache: dict[str, tuple[int, str]] = {}
 _pornhub_refresh_lock = threading.Lock()
+_pornhub_refresh_inflight: dict[str, threading.Event] = {}
 
 
 def _cached_media_load(key: str, loader, max_age: int = 300):
@@ -1593,7 +1594,10 @@ def _create_abema_manifest(downloader: YoutubeDL, info: dict, max_height: int = 
         preferred = hls_formats
     if not preferred:
         raise StreamCompatibilityError("ABEMA did not provide an HLS stream")
-    selected = max(preferred, key=_stream_format_score)
+    selected = max(
+        preferred,
+        key=lambda item: (int(item.get("height") or 0), float(item.get("tbr") or 0)),
+    )
     manifest, final_url = _read_public_hls_manifest(selected["url"], JAPAN_PROXY_URL)
 
     key_tokens = {}
@@ -2044,6 +2048,36 @@ def _pornhub_media_expiry(upstream_url: str) -> int:
     return int(value) if value.isdigit() else 0
 
 
+def _refresh_pornhub_media(source_url: str, quality: str, key: str, event: threading.Event) -> str:
+    try:
+        kind, refreshed_link = _extract_stream_media(source_url, False, quality)
+        if kind != "redirect" or not refreshed_link.startswith(PORNHUB_MEDIA_PROXY_BASE_URL):
+            raise ValueError("Pornhub did not return a refreshed media URL")
+        new_url, _, _ = _decode_pornhub_media_token(
+            refreshed_link.partition("token=")[2]
+        )
+        with _pornhub_refresh_lock:
+            _pornhub_refresh_cache[key] = (_pornhub_media_expiry(new_url), new_url)
+            if len(_pornhub_refresh_cache) > 128:
+                now = int(time.time())
+                for name in [
+                    name for name, item in _pornhub_refresh_cache.items() if item[0] <= now
+                ]:
+                    _pornhub_refresh_cache.pop(name, None)
+        return new_url
+    finally:
+        with _pornhub_refresh_lock:
+            _pornhub_refresh_inflight.pop(key, None)
+            event.set()
+
+
+def _background_pornhub_refresh(source_url: str, quality: str, key: str, event: threading.Event):
+    try:
+        _refresh_pornhub_media(source_url, quality, key, event)
+    except (DownloadError, HTTPError, URLError, TimeoutError, ValueError, OSError) as error:
+        print(f"Pornhub URL pre-refresh failed: {type(error).__name__}", file=sys.stderr, flush=True)
+
+
 def _current_pornhub_media_url(
     upstream_url: str, source_url: str, quality: str, force: bool = False
 ) -> str:
@@ -2051,24 +2085,41 @@ def _current_pornhub_media_url(
         return upstream_url
     key = f"{source_url}\n{quality}"
     now = int(time.time())
+    launch_background = False
+    leader = False
     with _pornhub_refresh_lock:
         cached = _pornhub_refresh_cache.get(key)
-        if not force and cached and cached[0] > now + 300:
+        current_url = cached[1] if cached and cached[0] > now else upstream_url
+        expires_at = _pornhub_media_expiry(current_url)
+        event = _pornhub_refresh_inflight.get(key)
+        if not force and expires_at > now + 60:
+            if expires_at <= now + 900 and event is None:
+                event = threading.Event()
+                _pornhub_refresh_inflight[key] = event
+                launch_background = True
+            result = current_url
+        else:
+            result = None
+            if event is None:
+                event = threading.Event()
+                _pornhub_refresh_inflight[key] = event
+                leader = True
+    if result is not None:
+        if launch_background:
+            threading.Thread(
+                target=_background_pornhub_refresh,
+                args=(source_url, quality, key, event),
+                daemon=True,
+            ).start()
+        return result
+    if leader:
+        return _refresh_pornhub_media(source_url, quality, key, event)
+    event.wait(timeout=30)
+    with _pornhub_refresh_lock:
+        cached = _pornhub_refresh_cache.get(key)
+        if cached and cached[0] > int(time.time()) + 60:
             return cached[1]
-        if not force and _pornhub_media_expiry(upstream_url) > now + 300:
-            return upstream_url
-        kind, refreshed_link = _extract_stream_media(source_url, False, quality)
-        if kind != "redirect" or not refreshed_link.startswith(PORNHUB_MEDIA_PROXY_BASE_URL):
-            raise ValueError("Pornhub did not return a refreshed media URL")
-        new_url, _, _ = _decode_pornhub_media_token(
-            refreshed_link.partition("token=")[2]
-        )
-        _pornhub_refresh_cache[key] = (_pornhub_media_expiry(new_url), new_url)
-        if len(_pornhub_refresh_cache) > 128:
-            expired = [name for name, item in _pornhub_refresh_cache.items() if item[0] <= now]
-            for name in expired:
-                _pornhub_refresh_cache.pop(name, None)
-        return new_url
+    raise ValueError("Could not refresh the Pornhub media URL")
 
 
 def _read_pornhub_resource(
@@ -2415,7 +2466,10 @@ def _extract_stream_media(
         ]
         if hls_formats:
             preferred = [item for item in hls_formats if item["height"] <= max_height]
-            selected = max(preferred or hls_formats, key=_stream_format_score)
+            selected = max(
+                preferred or hls_formats,
+                key=lambda item: (int(item.get("height") or 0), float(item.get("tbr") or 0)),
+            )
             return "redirect", _validate_direct_media_url(selected["url"])
     if isinstance(direct_url, str) and not (max_height and _host_matches(source_host, "bsky.app")):
         if is_player_hls_source and (
@@ -2448,7 +2502,17 @@ def _extract_stream_media(
             or not isinstance(stream_format.get("height"), (int, float))
             or stream_format["height"] <= max_height
         ]
-        selected = max(preferred_formats or progressive_formats, key=_stream_format_score)
+        selected = max(
+            preferred_formats or progressive_formats,
+            key=(
+                lambda item: (
+                    int(item.get("ext") == "mp4"),
+                    int(item.get("height") or 0),
+                    float(item.get("tbr") or 0),
+                )
+                if max_height else _stream_format_score
+            ),
+        )
         if is_rule34video:
             return "redirect", _rule34video_proxy_url(selected["url"], value)
         if is_pornhub:
