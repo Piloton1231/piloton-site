@@ -276,7 +276,7 @@ PORNHUB_TOKEN_SECONDS = max(
 )
 TVER_MUX_TOKEN_SECONDS = max(
     3600,
-    min(14400, int(os.getenv("TVER_MUX_TOKEN_SECONDS", "7200"))),
+    min(14400, int(os.getenv("TVER_MUX_TOKEN_SECONDS", "14400"))),
 )
 STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~-]{16,256}")
 
@@ -297,6 +297,7 @@ MEDIA_CACHE_MAX_BYTES = 48_000_000
 _pornhub_refresh_cache: dict[str, tuple[int, str]] = {}
 _pornhub_refresh_lock = threading.Lock()
 _pornhub_refresh_inflight: dict[str, threading.Event] = {}
+_stream_manifest_cache: OrderedDict[str, tuple[float, tuple[str, str]]] = OrderedDict()
 
 
 def _cached_media_load(key: str, loader, max_age: int = 300):
@@ -2392,13 +2393,15 @@ def _extract_stream_media(
 
     tiktok_cookie_header = ""
     tiktok_use_proxy = False
-    extract_attempts = 3 if is_tiktok else 1
+    extract_attempts = 3 if is_tiktok else 2 if is_bilibili and YOUTUBE_PROXY_URL else 1
     for extract_attempt in range(extract_attempts):
         attempt_options = dict(options)
         if is_tiktok and YOUTUBE_PROXY_URL:
             tiktok_use_proxy = extract_attempt != 1
             if tiktok_use_proxy:
                 attempt_options["proxy"] = YOUTUBE_PROXY_URL
+        if is_bilibili and extract_attempt == 1:
+            attempt_options["proxy"] = YOUTUBE_PROXY_URL
         try:
             with YoutubeDL(attempt_options) as downloader:
                 if is_abema:
@@ -3290,6 +3293,13 @@ async def resolve_stream(
     route, video_id = _validate_stream_source_url(url)
     client = _request_client_key(request)
     _check_rate_limit(client)
+    source_host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    cache_key = (
+        f"{url}\n{quality}"
+        if route == "extract" and any(
+            _host_matches(source_host, root) for root in ("tver.jp", "abema.tv")
+        ) else ""
+    )
 
     if route == "direct":
         return RedirectResponse(
@@ -3330,15 +3340,31 @@ async def resolve_stream(
                     status_code=307,
                     headers=_stream_resolver_headers("original-e621"),
                 )
-            stream_kind, stream_content = await asyncio.wait_for(
-                asyncio.to_thread(_extract_stream_media, url, player, quality),
-                timeout=STREAM_EXTRACT_TIMEOUT_SECONDS,
-            )
+            cached = _stream_manifest_cache.get(cache_key) if cache_key else None
+            if cached and cached[0] > time.monotonic():
+                _stream_manifest_cache.move_to_end(cache_key)
+                stream_kind, stream_content = cached[1]
+            else:
+                stream_kind, stream_content = await asyncio.wait_for(
+                    asyncio.to_thread(_extract_stream_media, url, player, quality),
+                    timeout=STREAM_EXTRACT_TIMEOUT_SECONDS,
+                )
+                if cache_key and stream_kind in {"tver-muxed-manifest", "abema-manifest"}:
+                    _stream_manifest_cache[cache_key] = (
+                        time.monotonic() + 300, (stream_kind, stream_content)
+                    )
+                    _stream_manifest_cache.move_to_end(cache_key)
+                    while len(_stream_manifest_cache) > 16:
+                        _stream_manifest_cache.popitem(last=False)
     except DownloadError as error:
         print(f"stream extraction failed: {error}", file=sys.stderr, flush=True)
         message = str(error).lower()
         detail = (
-            "This live channel is currently offline"
+            "The Japanese proxy is temporarily unavailable"
+            if "unable to connect to proxy" in message and any(
+                _host_matches(source_host, root) for root in ("tver.jp", "abema.tv")
+            )
+            else "This live channel is currently offline"
             if "not currently live" in message
             else "This TwitCasting archive is unavailable"
             if "failed to get m3u8 playlist" in message and "twitcasting" in message
@@ -3353,7 +3379,7 @@ async def resolve_stream(
             else "The site did not provide a VRChat-compatible stream"
         )
         raise HTTPException(
-            status_code=422,
+            status_code=503 if detail == "The Japanese proxy is temporarily unavailable" else 422,
             detail=detail,
         ) from error
     except StreamCompatibilityError as error:
