@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import html
+import hashlib
 import http.cookiejar
 from http.client import IncompleteRead
 import ipaddress
@@ -14,7 +15,9 @@ import tempfile
 import threading
 import time
 import zlib
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
@@ -128,6 +131,8 @@ INSTAGRAM_EMBED_HEADERS = {
     "Accept": "text/html,video/*,image/*;q=0.9,*/*;q=0.8",
 }
 STREAM_SOURCE_HOST_ROOTS = (
+    "bsky.app",
+    "bilibili.com",
     "dailymotion.com",
     "pornhub.com",
     "xnxx.com",
@@ -196,6 +201,7 @@ TVER_MAX_HEIGHT = max(
     360,
     min(720, int(os.getenv("TVER_MAX_HEIGHT", "540"))),
 )
+STREAM_QUALITY_CHOICES = {"auto", "360", "480", "540", "720", "1080"}
 TVER_TRAILING_SEGMENT_TOLERANCE_SECONDS = max(
     0.1,
     min(
@@ -222,6 +228,7 @@ RULE34VIDEO_MEDIA_PROXY_BASE_URL = (
     "https://video.piloton.cc/stream/rule34video/media.mp4?token="
 )
 PORNHUB_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/pornhub/media.mp4?token="
+BILIBILI_MUX_BASE_URL = "https://video.piloton.cc/stream/bilibili/mux.mp4?token="
 PLAYER_HLS_PROXY_BASE_URL = "https://video.piloton.cc/stream/player/media"
 TIKTOK_MEDIA_HOST_ROOTS = (
     "tiktok.com",
@@ -234,10 +241,13 @@ RULE34VIDEO_MEDIA_HOST_ROOTS = (
     "boomio-cdn.com",
 )
 PORNHUB_MEDIA_HOST_ROOTS = ("phncdn.com",)
+BILIBILI_MEDIA_HOST_ROOTS = ("bilivideo.com", "bilibili.com")
 PLAYER_HLS_MEDIA_HOST_ROOTS = (
     "dmcdn.net",
     "xnxx-cdn.com",
     "rutube.ru",
+    "twimg.com",
+    "twitcasting.tv",
 )
 PLAYER_TEST_PREVIEW_SECONDS = max(
     4,
@@ -256,6 +266,14 @@ TIKTOK_MEDIA_CHUNK_BYTES = max(
     1_000_000,
     min(4_000_000, int(os.getenv("TIKTOK_MEDIA_CHUNK_BYTES", "4000000"))),
 )
+PORNHUB_MEDIA_CHUNK_BYTES = max(
+    512_000,
+    min(4_000_000, int(os.getenv("PORNHUB_MEDIA_CHUNK_BYTES", "2000000"))),
+)
+PORNHUB_TOKEN_SECONDS = max(
+    3600,
+    min(21600, int(os.getenv("PORNHUB_TOKEN_SECONDS", "14400"))),
+)
 TVER_MUX_TOKEN_SECONDS = max(
     3600,
     min(14400, int(os.getenv("TVER_MUX_TOKEN_SECONDS", "7200"))),
@@ -271,6 +289,54 @@ _redgifs_slots = asyncio.Semaphore(4)
 _stream_slots = asyncio.Semaphore(2)
 _redgifs_token: tuple[float, str] | None = None
 _redgifs_token_lock = threading.Lock()
+_media_cache: OrderedDict[str, tuple[float, object, int]] = OrderedDict()
+_media_cache_lock = threading.Lock()
+_media_cache_bytes = 0
+_media_inflight: dict[str, threading.Event] = {}
+MEDIA_CACHE_MAX_BYTES = 48_000_000
+_pornhub_refresh_cache: dict[str, tuple[int, str]] = {}
+_pornhub_refresh_lock = threading.Lock()
+
+
+def _cached_media_load(key: str, loader, max_age: int = 300):
+    global _media_cache_bytes
+    with _media_cache_lock:
+        cached = _media_cache.get(key)
+        if cached and cached[0] > time.monotonic():
+            _media_cache.move_to_end(key)
+            return cached[1]
+        in_flight = _media_inflight.get(key)
+        leader = in_flight is None
+        if leader:
+            in_flight = threading.Event()
+            _media_inflight[key] = in_flight
+    if not leader:
+        in_flight.wait(timeout=45)
+        with _media_cache_lock:
+            cached = _media_cache.get(key)
+            if cached and cached[0] > time.monotonic():
+                _media_cache.move_to_end(key)
+                return cached[1]
+    try:
+        value = loader()
+        body = value if isinstance(value, bytes) else value[0]
+        size = len(body) if isinstance(body, bytes) else 0
+        if 0 < size <= MEDIA_CACHE_MAX_BYTES:
+            with _media_cache_lock:
+                old = _media_cache.pop(key, None)
+                if old:
+                    _media_cache_bytes -= old[2]
+                _media_cache[key] = (time.monotonic() + max_age, value, size)
+                _media_cache_bytes += size
+                while _media_cache_bytes > MEDIA_CACHE_MAX_BYTES:
+                    _, removed = _media_cache.popitem(last=False)
+                    _media_cache_bytes -= removed[2]
+        return value
+    finally:
+        if leader:
+            with _media_cache_lock:
+                _media_inflight.pop(key, None)
+                in_flight.set()
 
 
 @app.get("/", include_in_schema=False)
@@ -947,11 +1013,11 @@ def _create_tver_master(master_url: str) -> str:
     return _rewrite_tver_hls_manifest(simplified, master_url)
 
 
-def _select_tver_track_urls(master_url: str) -> tuple[str, str]:
+def _select_tver_track_urls(master_url: str, max_height: int = TVER_MAX_HEIGHT) -> tuple[str, str]:
     simplified = _simplify_public_hls_master(
         _validate_tver_upstream_url(master_url),
         JAPAN_PROXY_URL,
-        TVER_MAX_HEIGHT,
+        max_height,
     )
     lines = simplified.splitlines()
     audio_line = next(
@@ -1116,8 +1182,8 @@ def _tver_mux_segment_url(video_segment: dict, audio_segment: dict) -> str:
     return f"{TVER_MUX_MEDIA_BASE_URL}{quote(token, safe='')}"
 
 
-def _create_tver_muxed_playlist(master_url: str) -> str:
-    video_url, audio_url = _select_tver_track_urls(master_url)
+def _create_tver_muxed_playlist(master_url: str, max_height: int = TVER_MAX_HEIGHT) -> str:
+    video_url, audio_url = _select_tver_track_urls(master_url, max_height)
     video_segments, video_target = _read_tver_track_manifest(video_url)
     audio_segments, audio_target = _read_tver_track_manifest(audio_url)
     if len(video_segments) != len(audio_segments):
@@ -1164,9 +1230,14 @@ def _create_tver_muxed_playlist(master_url: str) -> str:
     return "\n".join(result) + "\n"
 
 
-def _single_tver_segment_manifest(segment: dict) -> str:
+def _single_tver_segment_manifest(
+    segment: dict, local_media_url: str | None = None, local_key_url: str | None = None
+) -> str:
     segment = _validate_tver_mux_segment(segment)
-    if JAPAN_PROXY_URL:
+    if local_media_url:
+        segment["url"] = local_media_url
+        segment["key_url"] = local_key_url
+    elif JAPAN_PROXY_URL:
         segment["url"] = _tver_internal_proxy_url(segment["url"])
         if segment["key_url"]:
             segment["key_url"] = _tver_internal_proxy_url(segment["key_url"])
@@ -1200,10 +1271,51 @@ def _ffmpeg_executable() -> str:
     return str(system_ffmpeg) if system_ffmpeg.is_file() else get_ffmpeg_exe()
 
 
+@lru_cache(maxsize=64)
+def _read_tver_key(upstream_url: str) -> bytes:
+    body, _, _, _, _ = _read_tver_resource(upstream_url, timeout_seconds=10, attempts=2)
+    if len(body) != 16:
+        raise ValueError("TVer returned an invalid encryption key")
+    return body
+
+
 def _mux_tver_segment(video_segment: dict, audio_segment: dict) -> bytes:
-    video_manifest = _single_tver_segment_manifest(video_segment)
-    audio_manifest = _single_tver_segment_manifest(audio_segment)
     with tempfile.TemporaryDirectory(prefix="piloton-tver-") as temp_directory:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            video_task = pool.submit(_read_tver_resource, video_segment["url"], None, 10, 2)
+            audio_task = pool.submit(_read_tver_resource, audio_segment["url"], None, 10, 2)
+            video_key_task = (
+                pool.submit(_read_tver_key, video_segment["key_url"])
+                if video_segment.get("key_url") else None
+            )
+            audio_key_task = (
+                pool.submit(_read_tver_key, audio_segment["key_url"])
+                if audio_segment.get("key_url") else None
+            )
+            video_body = video_task.result()[0]
+            audio_body = audio_task.result()[0]
+            video_key = video_key_task.result() if video_key_task else None
+            audio_key = audio_key_task.result() if audio_key_task else None
+        video_media_path = Path(temp_directory, "video.ts")
+        audio_media_path = Path(temp_directory, "audio.ts")
+        video_media_path.write_bytes(video_body)
+        audio_media_path.write_bytes(audio_body)
+        video_key_url = None
+        audio_key_url = None
+        if video_key:
+            video_key_path = Path(temp_directory, "video.key")
+            video_key_path.write_bytes(video_key)
+            video_key_url = video_key_path.as_uri()
+        if audio_key:
+            audio_key_path = Path(temp_directory, "audio.key")
+            audio_key_path.write_bytes(audio_key)
+            audio_key_url = audio_key_path.as_uri()
+        video_manifest = _single_tver_segment_manifest(
+            video_segment, video_media_path.as_uri(), video_key_url
+        )
+        audio_manifest = _single_tver_segment_manifest(
+            audio_segment, audio_media_path.as_uri(), audio_key_url
+        )
         video_path = Path(temp_directory, "video.m3u8")
         audio_path = Path(temp_directory, "audio.m3u8")
         video_path.write_text(video_manifest, encoding="utf-8")
@@ -1266,6 +1378,97 @@ def _stream_format_score(stream_format: dict) -> tuple[int, int, int, float]:
         int(height <= 720),
         int(height),
         float(stream_format.get("tbr") or 0),
+    )
+
+
+def _validate_bilibili_media_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if not any(_host_matches(host, root) for root in BILIBILI_MEDIA_HOST_ROOTS):
+        raise ValueError("Unexpected Bilibili media host")
+    return value
+
+
+def _encode_bilibili_mux_token(video_url: str, audio_url: str) -> str:
+    payload = json.dumps(
+        [
+            _validate_bilibili_media_url(video_url),
+            _validate_bilibili_media_url(audio_url),
+            int(time.time()) + 3600,
+        ],
+        separators=(",", ":"),
+    ).encode()
+    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+
+
+def _decode_bilibili_mux_token(token: str) -> tuple[str, str]:
+    if len(token) > 12000 or not token.startswith("z"):
+        raise HTTPException(status_code=400, detail="Invalid Bilibili mux token")
+    try:
+        encoded = token[1:]
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + padding)))
+    except (ValueError, TypeError, json.JSONDecodeError, zlib.error) as error:
+        raise HTTPException(status_code=400, detail="Invalid Bilibili mux token") from error
+    if not isinstance(payload, list) or len(payload) != 3:
+        raise HTTPException(status_code=400, detail="Invalid Bilibili mux token")
+    video_url, audio_url, expires_at = payload
+    if (
+        not isinstance(video_url, str)
+        or not isinstance(audio_url, str)
+        or not isinstance(expires_at, int)
+        or not int(time.time()) <= expires_at <= int(time.time()) + 3600
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid Bilibili mux token")
+    try:
+        return _validate_bilibili_media_url(video_url), _validate_bilibili_media_url(audio_url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid Bilibili mux target") from error
+
+
+def _bilibili_mux_url(info: dict, max_height: int) -> str:
+    formats = [item for item in info.get("formats", []) if isinstance(item, dict)]
+    video_formats = [
+        item for item in formats
+        if isinstance(item.get("url"), str)
+        and item.get("protocol") == "https"
+        and item.get("ext") == "mp4"
+        and str(item.get("vcodec", "")).startswith("avc1")
+        and item.get("acodec") == "none"
+        and isinstance(item.get("height"), (int, float))
+    ]
+    audio_formats = [
+        item for item in formats
+        if isinstance(item.get("url"), str)
+        and item.get("protocol") == "https"
+        and item.get("vcodec") == "none"
+        and str(item.get("acodec", "")).startswith("mp4a")
+    ]
+    if not video_formats or not audio_formats:
+        raise StreamCompatibilityError("Bilibili did not provide compatible video and audio")
+    preferred = [item for item in video_formats if item["height"] <= max_height]
+    video = max(preferred or video_formats, key=lambda item: item["height"])
+    audio = max(audio_formats, key=lambda item: float(item.get("abr") or item.get("tbr") or 0))
+    token = _encode_bilibili_mux_token(video["url"], audio["url"])
+    return f"{BILIBILI_MUX_BASE_URL}{quote(token, safe='')}"
+
+
+def _start_bilibili_mux_process(video_url: str, audio_url: str) -> subprocess.Popen:
+    command = [
+        _ffmpeg_executable(),
+        "-nostdin", "-hide_banner", "-loglevel", "error", "-rw_timeout", "20000000",
+        "-user_agent", NICONICO_FRONTEND_HEADERS["User-Agent"],
+        "-referer", "https://www.bilibili.com/", "-i", _validate_bilibili_media_url(video_url),
+        "-user_agent", NICONICO_FRONTEND_HEADERS["User-Agent"],
+        "-referer", "https://www.bilibili.com/", "-i", _validate_bilibili_media_url(audio_url),
+        "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-map_metadata", "-1",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-frag_duration", "2000000", "-max_interleave_delta", "0",
+        "-flush_packets", "1", "-f", "mp4", "pipe:1",
+    ]
+    return subprocess.Popen(
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, bufsize=0,
     )
 
 
@@ -1365,7 +1568,7 @@ def _read_abema_video_key(downloader: YoutubeDL, license_url: str) -> bytes:
     return key
 
 
-def _create_abema_manifest(downloader: YoutubeDL, info: dict) -> str:
+def _create_abema_manifest(downloader: YoutubeDL, info: dict, max_height: int = 720) -> str:
     formats = [stream_format for stream_format in info.get("formats", []) if isinstance(stream_format, dict)]
     hls_formats = [
         stream_format
@@ -1377,7 +1580,7 @@ def _create_abema_manifest(downloader: YoutubeDL, info: dict) -> str:
         stream_format
         for stream_format in hls_formats
         if isinstance(stream_format.get("height"), (int, float))
-        and 0 < stream_format["height"] <= 720
+        and 0 < stream_format["height"] <= max_height
     ]
     if not preferred:
         preferred = hls_formats
@@ -1572,22 +1775,24 @@ def _tiktok_proxy_url(
     return f"{TIKTOK_MEDIA_PROXY_BASE_URL}{quote(token, safe='')}"
 
 
-def _bounded_tiktok_range(range_header: str | None) -> str:
+def _bounded_tiktok_range(
+    range_header: str | None, max_bytes: int = TIKTOK_MEDIA_CHUNK_BYTES
+) -> str:
     if range_header:
         suffix_match = re.fullmatch(r"bytes=-(\d+)", range_header)
         if suffix_match:
-            length = min(int(suffix_match.group(1)), TIKTOK_MEDIA_CHUNK_BYTES)
+            length = min(int(suffix_match.group(1)), max_bytes)
             if length > 0:
                 return f"bytes=-{length}"
         range_match = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header)
         if range_match:
             start = int(range_match.group(1))
             requested_end = int(range_match.group(2)) if range_match.group(2) else None
-            maximum_end = start + TIKTOK_MEDIA_CHUNK_BYTES - 1
+            maximum_end = start + max_bytes - 1
             end = min(requested_end, maximum_end) if requested_end is not None else maximum_end
             if end >= start:
                 return f"bytes={start}-{end}"
-    return f"bytes=0-{TIKTOK_MEDIA_CHUNK_BYTES - 1}"
+    return f"bytes=0-{max_bytes - 1}"
 
 
 def _read_tiktok_resource(
@@ -1759,18 +1964,32 @@ def _validate_pornhub_media_url(value: str) -> str:
     return value
 
 
-def _encode_pornhub_media_token(upstream_url: str) -> str:
+def _validate_pornhub_source_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if not _host_matches(host, "pornhub.com"):
+        raise ValueError("Unexpected Pornhub source host")
+    return value
+
+
+def _encode_pornhub_media_token(
+    upstream_url: str, source_url: str = "", quality: str = "auto"
+) -> str:
+    if quality not in STREAM_QUALITY_CHOICES:
+        raise ValueError("Invalid Pornhub quality")
     payload = json.dumps(
         [
             _validate_pornhub_media_url(upstream_url),
-            int(time.time()) + STREAM_TOKEN_SECONDS,
+            _validate_pornhub_source_url(source_url) if source_url else "",
+            quality,
+            int(time.time()) + PORNHUB_TOKEN_SECONDS,
         ],
         separators=(",", ":"),
     ).encode()
     return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
 
 
-def _decode_pornhub_media_token(token: str) -> str:
+def _decode_pornhub_media_token(token: str) -> tuple[str, str, str]:
     if len(token) > 6000 or not token.startswith("z"):
         raise HTTPException(status_code=400, detail="Invalid Pornhub media token")
     try:
@@ -1779,42 +1998,77 @@ def _decode_pornhub_media_token(token: str) -> str:
         payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + padding)))
     except (ValueError, TypeError, json.JSONDecodeError, zlib.error) as error:
         raise HTTPException(status_code=400, detail="Invalid Pornhub media token") from error
-    if not isinstance(payload, list) or len(payload) != 2:
+    if not isinstance(payload, list) or len(payload) not in {2, 4}:
         raise HTTPException(status_code=400, detail="Invalid Pornhub media token")
-    upstream_url, expires_at = payload
+    if len(payload) == 2:
+        upstream_url, expires_at = payload
+        source_url, quality = "", "auto"
+    else:
+        upstream_url, source_url, quality, expires_at = payload
     if (
         not isinstance(upstream_url, str)
+        or not isinstance(source_url, str)
+        or not isinstance(quality, str)
+        or quality not in STREAM_QUALITY_CHOICES
         or not isinstance(expires_at, int)
         or expires_at < int(time.time())
-        or expires_at > int(time.time()) + 3600
+        or expires_at > int(time.time()) + PORNHUB_TOKEN_SECONDS
     ):
         raise HTTPException(status_code=400, detail="Expired or invalid Pornhub media token")
     try:
-        return _validate_pornhub_media_url(upstream_url)
+        return (
+            _validate_pornhub_media_url(upstream_url),
+            _validate_pornhub_source_url(source_url) if source_url else "",
+            quality,
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail="Invalid Pornhub media target") from error
 
 
-def _pornhub_proxy_url(upstream_url: str) -> str:
-    token = _encode_pornhub_media_token(upstream_url)
+def _pornhub_proxy_url(
+    upstream_url: str, source_url: str = "", quality: str = "auto"
+) -> str:
+    token = _encode_pornhub_media_token(upstream_url, source_url, quality)
     return f"{PORNHUB_MEDIA_PROXY_BASE_URL}{quote(token, safe='')}"
+
+
+def _pornhub_media_expiry(upstream_url: str) -> int:
+    value = parse_qs(urlsplit(upstream_url).query).get("validto", ["0"])[0]
+    return int(value) if value.isdigit() else 0
+
+
+def _current_pornhub_media_url(
+    upstream_url: str, source_url: str, quality: str, force: bool = False
+) -> str:
+    if not source_url:
+        return upstream_url
+    key = f"{source_url}\n{quality}"
+    now = int(time.time())
+    with _pornhub_refresh_lock:
+        cached = _pornhub_refresh_cache.get(key)
+        if not force and cached and cached[0] > now + 300:
+            return cached[1]
+        if not force and _pornhub_media_expiry(upstream_url) > now + 300:
+            return upstream_url
+        kind, refreshed_link = _extract_stream_media(source_url, False, quality)
+        if kind != "redirect" or not refreshed_link.startswith(PORNHUB_MEDIA_PROXY_BASE_URL):
+            raise ValueError("Pornhub did not return a refreshed media URL")
+        new_url, _, _ = _decode_pornhub_media_token(
+            refreshed_link.partition("token=")[2]
+        )
+        _pornhub_refresh_cache[key] = (_pornhub_media_expiry(new_url), new_url)
+        if len(_pornhub_refresh_cache) > 128:
+            expired = [name for name, item in _pornhub_refresh_cache.items() if item[0] <= now]
+            for name in expired:
+                _pornhub_refresh_cache.pop(name, None)
+        return new_url
 
 
 def _read_pornhub_resource(
     upstream_url: str,
     range_header: str | None = None,
 ) -> tuple[bytes, int, str, dict[str, str]]:
-    request = UrlRequest(
-        _validate_pornhub_media_url(upstream_url),
-        headers={
-            "Accept": "*/*",
-            "Origin": "https://www.pornhub.com",
-            "Referer": "https://www.pornhub.com/",
-            "User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"],
-            "Range": _bounded_tiktok_range(range_header),
-        },
-        method="GET",
-    )
+    requested_range = _bounded_tiktok_range(range_header, PORNHUB_MEDIA_CHUNK_BYTES)
     # Pornhub binds its temporary media URL to the same residential exit that
     # opened the watch page.  Fetching the page through the proxy and the media
     # directly from the VPS produces HTTP 474/403 responses.
@@ -1823,21 +2077,53 @@ def _read_pornhub_resource(
         if YOUTUBE_PROXY_URL
         else build_opener()
     )
-    with opener.open(request, timeout=25) as response:
-        _validate_pornhub_media_url(response.geturl())
-        content_type = response.headers.get("Content-Type", "video/mp4")
-        content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > TIKTOK_MEDIA_CHUNK_BYTES:
-            raise ValueError("Pornhub media response is too large")
-        body = response.read(TIKTOK_MEDIA_CHUNK_BYTES + 1)
-        if len(body) > TIKTOK_MEDIA_CHUNK_BYTES:
-            raise ValueError("Pornhub media response is too large")
-        forwarded_headers = {
-            name: response.headers[name]
-            for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
-            if response.headers.get(name)
-        }
-        return body, response.status, content_type, forwarded_headers
+    for attempt in range(2):
+        request = UrlRequest(
+            _validate_pornhub_media_url(upstream_url),
+            headers={
+                "Accept": "*/*",
+                "Origin": "https://www.pornhub.com",
+                "Referer": "https://www.pornhub.com/",
+                "User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"],
+                "Range": requested_range,
+            },
+            method="GET",
+        )
+        try:
+            with opener.open(request, timeout=20) as response:
+                _validate_pornhub_media_url(response.geturl())
+                content_type = response.headers.get("Content-Type", "video/mp4")
+                content_length = response.headers.get("Content-Length")
+                if response.status == 200:
+                    if not requested_range.startswith("bytes=0-") or not content_length:
+                        raise ValueError("Pornhub did not honor the requested seek range")
+                    requested_end = int(requested_range.partition("-")[2])
+                    body = response.read(min(requested_end + 1, PORNHUB_MEDIA_CHUNK_BYTES))
+                    if not body:
+                        raise ValueError("Pornhub returned an empty media response")
+                    return body, 206, content_type, {
+                        "Accept-Ranges": "bytes",
+                        "Content-Range": f"bytes 0-{len(body) - 1}/{content_length}",
+                    }
+                if content_length and int(content_length) > PORNHUB_MEDIA_CHUNK_BYTES:
+                    raise ValueError("Pornhub media response is too large")
+                body = response.read(PORNHUB_MEDIA_CHUNK_BYTES + 1)
+                if len(body) > PORNHUB_MEDIA_CHUNK_BYTES:
+                    raise ValueError("Pornhub media response is too large")
+                forwarded_headers = {
+                    name: response.headers[name]
+                    for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+                    if response.headers.get(name)
+                }
+                return body, response.status, content_type, forwarded_headers
+        except HTTPError as error:
+            if error.code not in {408, 425, 429, 500, 502, 503, 504} or attempt:
+                raise
+        except (URLError, TimeoutError, OSError, IncompleteRead):
+            if attempt:
+                raise
+        time.sleep(0.2)
+    raise URLError("Pornhub media request failed")
 
 
 def _validate_player_hls_url(value: str) -> str:
@@ -1981,8 +2267,13 @@ def _trim_player_hls_manifest(manifest: str) -> str:
     return "\n".join(trimmed) + "\n"
 
 
-def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, str]:
+def _extract_stream_media(
+    value: str, player_mode: bool = False, quality: str = "auto"
+) -> tuple[str, str]:
     source_host = (urlsplit(value).hostname or "").lower().rstrip(".")
+    if quality not in STREAM_QUALITY_CHOICES:
+        raise ValueError("Unsupported stream quality")
+    max_height = int(quality) if quality != "auto" else None
     prefers_compatible_combined = any(
         _host_matches(source_host, root)
         for root in ("dailymotion.com", "pornhub.com", "xnxx.com", "rutube.ru")
@@ -1992,9 +2283,13 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
     is_tver = _host_matches(source_host, "tver.jp")
     is_tiktok = _host_matches(source_host, "tiktok.com")
     is_pornhub = _host_matches(source_host, "pornhub.com")
+    is_bilibili = _host_matches(source_host, "bilibili.com")
     is_player_hls_source = player_mode and any(
         _host_matches(source_host, root)
-        for root in ("dailymotion.com", "xnxx.com", "rutube.ru")
+        for root in (
+            "dailymotion.com", "xnxx.com", "rutube.ru",
+            "x.com", "twitter.com", "twitcasting.tv",
+        )
     )
     is_rule34video = _host_matches(source_host, "rule34video.com")
     is_rule34xxx = _host_matches(source_host, "rule34.xxx")
@@ -2002,6 +2297,8 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
         "format": (
             TIKTOK_FORMAT_SELECTOR
             if is_tiktok
+            else f"best[protocol=https][ext=mp4][height<={max_height}]/best[height<={max_height}]/best"
+            if is_pornhub and max_height
             else PORNHUB_FORMAT_SELECTOR
             if is_pornhub
             else COMPATIBLE_STREAM_FORMAT_SELECTOR
@@ -2029,6 +2326,8 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
         options["proxy"] = YOUTUBE_PROXY_URL
     if (is_tver or is_abema) and JAPAN_PROXY_URL:
         options["proxy"] = JAPAN_PROXY_URL
+    if is_bilibili and JAPAN_PROXY_URL:
+        options["proxy"] = JAPAN_PROXY_URL
     if JS_RUNTIME:
         runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
         options["js_runtimes"] = {JS_RUNTIME: runtime_options}
@@ -2054,7 +2353,9 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
                 if is_tiktok:
                     tiktok_cookie_header = _tiktok_cookie_header(downloader.cookiejar)
                 if isinstance(info, dict) and info.get("extractor_key") == "AbemaTV":
-                    return "abema-manifest", _create_abema_manifest(downloader, info)
+                    return "abema-manifest", _create_abema_manifest(
+                        downloader, info, max_height or 720
+                    )
             break
         except DownloadError:
             if extract_attempt + 1 >= extract_attempts:
@@ -2063,6 +2364,8 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
     direct_url = info.get("url") if isinstance(info, dict) else None
     if not isinstance(info, dict):
         raise ValueError("No stream information was returned")
+    if is_bilibili:
+        return "redirect", _bilibili_mux_url(info, max_height or 720)
     if is_tiktok:
         progressive_url = _select_tiktok_progressive(info)
         if progressive_url:
@@ -2078,7 +2381,36 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
         progressive_url = _select_soundcloud_progressive(info)
         if progressive_url:
             return "redirect", progressive_url
-    if isinstance(direct_url, str):
+    formats = [stream_format for stream_format in info.get("formats", []) if isinstance(stream_format, dict)]
+    if is_player_hls_source and any(
+        _host_matches(source_host, root)
+        for root in ("x.com", "twitter.com", "twitcasting.tv")
+    ):
+        hls_master_url = next(
+            (
+                item.get("manifest_url") or item.get("url")
+                for item in formats
+                if isinstance(item.get("url"), str)
+                and str(item.get("protocol", "")).startswith("m3u8")
+            ),
+            None,
+        )
+        if isinstance(hls_master_url, str):
+            return "player-hls-manifest", _create_player_hls_manifest(hls_master_url)
+    if max_height and _host_matches(source_host, "bsky.app"):
+        hls_formats = [
+            stream_format for stream_format in formats
+            if isinstance(stream_format.get("url"), str)
+            and str(stream_format.get("protocol", "")).startswith("m3u8")
+            and stream_format.get("vcodec") != "none"
+            and stream_format.get("acodec") != "none"
+            and isinstance(stream_format.get("height"), (int, float))
+        ]
+        if hls_formats:
+            preferred = [item for item in hls_formats if item["height"] <= max_height]
+            selected = max(preferred or hls_formats, key=_stream_format_score)
+            return "redirect", _validate_direct_media_url(selected["url"])
+    if isinstance(direct_url, str) and not (max_height and _host_matches(source_host, "bsky.app")):
         if is_player_hls_source and (
             str(info.get("protocol", "")).startswith("m3u8")
             or urlsplit(direct_url).path.lower().endswith(".m3u8")
@@ -2087,10 +2419,9 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
         if is_rule34video:
             return "redirect", _rule34video_proxy_url(direct_url, value)
         if is_pornhub:
-            return "redirect", _pornhub_proxy_url(direct_url)
+            return "redirect", _pornhub_proxy_url(direct_url, value, quality)
         return "redirect", _validate_direct_media_url(direct_url)
 
-    formats = [stream_format for stream_format in info.get("formats", []) if isinstance(stream_format, dict)]
     progressive_formats = []
     for stream_format in formats:
         format_url = stream_format.get("url")
@@ -2104,11 +2435,17 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
             continue
         progressive_formats.append(stream_format)
     if progressive_formats:
-        selected = max(progressive_formats, key=_stream_format_score)
+        preferred_formats = [
+            stream_format for stream_format in progressive_formats
+            if max_height is None
+            or not isinstance(stream_format.get("height"), (int, float))
+            or stream_format["height"] <= max_height
+        ]
+        selected = max(preferred_formats or progressive_formats, key=_stream_format_score)
         if is_rule34video:
             return "redirect", _rule34video_proxy_url(selected["url"], value)
         if is_pornhub:
-            return "redirect", _pornhub_proxy_url(selected["url"])
+            return "redirect", _pornhub_proxy_url(selected["url"], value, quality)
         return "redirect", _validate_direct_media_url(selected["url"])
 
     manifest_url = next(
@@ -2122,7 +2459,9 @@ def _extract_stream_media(value: str, player_mode: bool = False) -> tuple[str, s
     )
     if manifest_url:
         if is_tver:
-            return "tver-muxed-manifest", _create_tver_muxed_playlist(manifest_url)
+            return "tver-muxed-manifest", _create_tver_muxed_playlist(
+                manifest_url, max_height or TVER_MAX_HEIGHT
+            )
         return "manifest", _simplify_public_hls_master(manifest_url)
 
     raise StreamCompatibilityError("The site only provided separate audio and video streams")
@@ -2276,6 +2615,8 @@ def _read_niconico_resource(
 def _read_tver_resource(
     upstream_url: str,
     range_header: str | None = None,
+    timeout_seconds: int = 25,
+    attempts: int = STREAM_RESOURCE_ATTEMPTS,
 ) -> tuple[bytes, int, str, dict[str, str], str]:
     request_headers = {"User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]}
     if range_header and re.fullmatch(r"bytes=(?:\d+-\d*|-\d+)", range_header):
@@ -2286,10 +2627,10 @@ def _read_tver_resource(
         if JAPAN_PROXY_URL
         else build_opener()
     )
-    for attempt in range(STREAM_RESOURCE_ATTEMPTS):
+    for attempt in range(attempts):
         request = UrlRequest(validated_url, headers=request_headers, method="GET")
         try:
-            with opener.open(request, timeout=25) as response:
+            with opener.open(request, timeout=timeout_seconds) as response:
                 final_url = _validate_tver_upstream_url(response.geturl())
                 content_type = response.headers.get("Content-Type", "application/octet-stream")
                 is_manifest = "mpegurl" in content_type.lower() or urlsplit(final_url).path.endswith(".m3u8")
@@ -2307,10 +2648,10 @@ def _read_tver_resource(
                 }
                 return body, response.status, content_type, forwarded_headers, final_url
         except HTTPError as error:
-            if error.code not in {408, 425, 429, 500, 502, 503, 504} or attempt + 1 >= STREAM_RESOURCE_ATTEMPTS:
+            if error.code not in {408, 425, 429, 500, 502, 503, 504} or attempt + 1 >= attempts:
                 raise
         except (URLError, TimeoutError, OSError, IncompleteRead):
-            if attempt + 1 >= STREAM_RESOURCE_ATTEMPTS:
+            if attempt + 1 >= attempts:
                 raise
         time.sleep(0.2 * (2**attempt))
     raise URLError("TVer stream request failed")
@@ -2514,7 +2855,7 @@ def _start_niconico_mux_process(master_url: str, domand_cookie: str) -> subproce
     )
 
 
-def _iter_niconico_mux(process: subprocess.Popen):
+def _iter_niconico_mux(process: subprocess.Popen, label: str = "NicoNico"):
     try:
         if process.stdout is None:
             return
@@ -2526,7 +2867,7 @@ def _iter_niconico_mux(process: subprocess.Popen):
         return_code = process.wait(timeout=5)
         if return_code:
             print(
-                f"NicoNico mux process exited with status {return_code}",
+                f"{label} mux process exited with status {return_code}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -2872,6 +3213,7 @@ async def resolve_stream(
     request: Request,
     url: str = Query(min_length=1, max_length=2048),
     player: bool = Query(default=False),
+    quality: str = Query(default="auto", pattern="^(auto|360|480|540|720|1080)$"),
 ) -> Response:
     url = _normalize_stream_source_url(url)
     route, video_id = _validate_stream_source_url(url)
@@ -2918,14 +3260,18 @@ async def resolve_stream(
                     headers=_stream_resolver_headers("original-e621"),
                 )
             stream_kind, stream_content = await asyncio.wait_for(
-                asyncio.to_thread(_extract_stream_media, url, player),
+                asyncio.to_thread(_extract_stream_media, url, player, quality),
                 timeout=STREAM_EXTRACT_TIMEOUT_SECONDS,
             )
     except DownloadError as error:
         print(f"stream extraction failed: {error}", file=sys.stderr, flush=True)
         message = str(error).lower()
         detail = (
-            "This content requires a login or paid subscription"
+            "This live channel is currently offline"
+            if "not currently live" in message
+            else "This TwitCasting archive is unavailable"
+            if "failed to get m3u8 playlist" in message and "twitcasting" in message
+            else "This content requires a login or paid subscription"
             if "subscription" in message or "login" in message or "cookies" in message
             else "This content is only available from Japan"
             if (
@@ -2998,10 +3344,13 @@ async def _proxy_abema_media_response(request: Request, token: str) -> Response:
     upstream_url = _decode_abema_stream_token(token)
     range_header = request.headers.get("range")
     try:
+        cache_key = "abema:" + hashlib.sha256(
+            f"{upstream_url}\n{range_header or ''}".encode()
+        ).hexdigest()
         body, status_code, content_type, upstream_headers = await asyncio.to_thread(
-            _read_abema_resource,
-            upstream_url,
-            range_header,
+            _cached_media_load,
+            cache_key,
+            lambda: _read_abema_resource(upstream_url, range_header),
         )
     except HTTPError as error:
         print(f"ABEMA media returned HTTP {error.code}", file=sys.stderr, flush=True)
@@ -3129,7 +3478,14 @@ async def serve_tver_muxed_segment(
 ) -> Response:
     video_segment, audio_segment = _decode_tver_mux_token(token)
     try:
-        body = await asyncio.to_thread(_mux_tver_segment, video_segment, audio_segment)
+        cache_key = "tver:" + hashlib.sha256(
+            json.dumps([video_segment, audio_segment], sort_keys=True).encode()
+        ).hexdigest()
+        body = await asyncio.to_thread(
+            _cached_media_load,
+            cache_key,
+            lambda: _mux_tver_segment(video_segment, audio_segment),
+        )
     except (subprocess.TimeoutExpired, ValueError, OSError) as error:
         print(f"TVer segment mux failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not combine the TVer stream") from error
@@ -3222,18 +3578,29 @@ async def proxy_pornhub_media(
     request: Request,
     token: str = Query(min_length=1, max_length=6000),
 ) -> Response:
-    upstream_url = _decode_pornhub_media_token(token)
+    upstream_url, source_url, quality = _decode_pornhub_media_token(token)
     try:
-        body, status_code, content_type, upstream_headers = await asyncio.to_thread(
-            _read_pornhub_resource,
-            upstream_url,
-            request.headers.get("range"),
+        current_url = await asyncio.to_thread(
+            _current_pornhub_media_url, upstream_url, source_url, quality
         )
+        try:
+            body, status_code, content_type, upstream_headers = await asyncio.to_thread(
+                _read_pornhub_resource, current_url, request.headers.get("range")
+            )
+        except HTTPError as error:
+            if error.code not in {401, 403, 404, 474} or not source_url:
+                raise
+            refreshed_url = await asyncio.to_thread(
+                _current_pornhub_media_url, upstream_url, source_url, quality, True
+            )
+            body, status_code, content_type, upstream_headers = await asyncio.to_thread(
+                _read_pornhub_resource, refreshed_url, request.headers.get("range")
+            )
     except HTTPError as error:
         print(f"Pornhub media returned HTTP {error.code}", file=sys.stderr, flush=True)
         status = 416 if error.code == 416 else 410 if error.code in {401, 403, 404} else 502
         raise HTTPException(status_code=status, detail="The Pornhub stream has expired") from error
-    except (URLError, TimeoutError, ValueError, OSError) as error:
+    except (DownloadError, URLError, TimeoutError, ValueError, OSError) as error:
         print(f"Pornhub media proxy failed: {type(error).__name__}", file=sys.stderr, flush=True)
         raise HTTPException(status_code=502, detail="Could not read the Pornhub stream") from error
 
@@ -3374,6 +3741,29 @@ async def stream_muxed_niconico_media(
             "Content-Disposition": 'inline; filename="niconico.mp4"',
             "X-Content-Type-Options": "nosniff",
             "X-Resolver-Path": "original-niconico-muxed-media",
+        },
+    )
+
+
+@app.get("/stream/bilibili/mux.mp4")
+async def stream_muxed_bilibili_media(
+    token: str = Query(min_length=1, max_length=12000),
+) -> StreamingResponse:
+    video_url, audio_url = _decode_bilibili_mux_token(token)
+    try:
+        process = await asyncio.to_thread(_start_bilibili_mux_process, video_url, audio_url)
+    except (OSError, ValueError) as error:
+        print(f"Bilibili mux startup failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not start the Bilibili stream") from error
+    return StreamingResponse(
+        _iter_niconico_mux(process, "Bilibili"),
+        media_type="video/mp4",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'inline; filename="bilibili.mp4"',
+            "X-Content-Type-Options": "nosniff",
+            "X-Resolver-Path": "original-bilibili-muxed-media",
         },
     )
 

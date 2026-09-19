@@ -193,6 +193,20 @@
 
     input[readonly] { color: var(--green); }
 
+    .quality-setting { margin-top: 16px; }
+    .quality-setting label { margin-bottom: 8px; font-size: 14px; }
+    .quality-setting select {
+      width: min(100%, 320px);
+      min-height: 48px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 15px;
+      padding: 0 14px;
+      color: var(--ink);
+      background: #0b1930;
+      font: inherit;
+    }
+    .quality-setting p { margin: 8px 0 0; color: var(--soft); font-size: 12px; }
+
     button {
       min-height: 58px;
       border: 0;
@@ -534,6 +548,18 @@
         <button id="create-button" type="button">変換</button>
         <button class="ghost" id="clear-button" type="button" disabled>クリア</button>
       </div>
+      <div class="quality-setting" id="quality-setting" hidden>
+        <label for="stream-quality">画質の上限</label>
+        <select id="stream-quality">
+          <option value="auto">自動（現在の標準設定）</option>
+          <option value="360">360p</option>
+          <option value="480">480p</option>
+          <option value="540">540p</option>
+          <option value="720">720p</option>
+          <option value="1080">1080p</option>
+        </select>
+        <p>選べる画質は配信元によって異なります。該当画質がない場合は近い形式を使います。</p>
+      </div>
       <p class="message" id="input-message" role="status" aria-live="polite">HTTPSの動画・プレイリスト・配信URLを入力してください。</p>
 
       <section id="results" hidden>
@@ -587,12 +613,14 @@
             <li>Instagram（公開投稿）</li>
             <li>Dailymotion</li>
             <li>Rutube</li>
+            <li>Bilibili（公開動画）</li>
           </ul>
         </article>
         <article class="support-group">
           <h3>配信・SNS・音声</h3>
           <ul class="support-list">
             <li>X / Twitter</li>
+            <li>Bluesky</li>
             <li>TikTok</li>
             <li>TVer</li>
             <li>ABEMA</li>
@@ -640,6 +668,8 @@
     const youtubeInput = document.getElementById('youtube-url');
     const createButton = document.getElementById('create-button');
     const clearButton = document.getElementById('clear-button');
+    const qualitySetting = document.getElementById('quality-setting');
+    const streamQuality = document.getElementById('stream-quality');
     const inputMessage = document.getElementById('input-message');
     const results = document.getElementById('results');
     const resultKind = document.getElementById('result-kind');
@@ -663,6 +693,7 @@
       'youtu.be'
     ]);
     let resultEntries = [];
+    const qualityHostRoots = ['tver.jp', 'abema.tv', 'pornhub.com', 'bilibili.com', 'bsky.app', 'x.com', 'twitter.com'];
 
     const parseYouTubeUrl = (value) => {
       try {
@@ -715,9 +746,11 @@
         [['instagram.com', 'kkinstagram.com'], 'Instagram（公開投稿）'],
         [['dailymotion.com'], 'Dailymotion'],
         [['rutube.ru'], 'Rutube'],
+        [['bilibili.com'], 'Bilibili'],
         [['pornhub.com'], 'Pornhub（公開動画）'],
         [['xnxx.com'], 'XNXX（公開動画）'],
         [['x.com', 'twitter.com'], 'X / Twitter'],
+        [['bsky.app'], 'Bluesky'],
         [['tiktok.com'], 'TikTok'],
         [['mellow-fan.com', 'openrec.tv'], 'mellow-fan / OPENREC'],
         [['twitcasting.tv'], 'ツイキャス'],
@@ -759,8 +792,21 @@
       }
       return {
         service: service || '動画・画像の直接URL',
-        url: `${streamResolverBaseUrl}${encodeURIComponent(source.href)}`
+        url: `${streamResolverBaseUrl}${encodeURIComponent(source.href)}${qualitySetting.hidden || streamQuality.value === 'auto' ? '' : `&quality=${streamQuality.value}`}`
       };
+    };
+
+    const updateQualitySetting = () => {
+      let enabled = false;
+      try {
+        const source = new URL(youtubeInput.value.trim());
+        enabled = source.protocol === 'https:'
+          && qualityHostRoots.some((root) => hostMatches(source.hostname.toLowerCase(), root));
+      } catch {
+        // Keep the selector hidden until a supported URL is entered.
+      }
+      qualitySetting.hidden = !enabled;
+      if (!enabled) streamQuality.value = 'auto';
     };
 
     const setBusy = (busy) => {
@@ -963,6 +1009,7 @@
 
     const clearTool = () => {
       youtubeInput.value = '';
+      updateQualitySetting();
       clearResults();
       clearButton.disabled = true;
       inputMessage.textContent = defaultInputMessage;
@@ -1002,6 +1049,12 @@
     ));
     youtubeInput.addEventListener('input', () => {
       clearButton.disabled = youtubeInput.value.length === 0;
+      updateQualitySetting();
+    });
+    streamQuality.addEventListener('change', () => {
+      if (streamResult.hidden) return;
+      const converted = buildStreamLink(youtubeInput.value.trim());
+      if (!converted.error) renderStreamResult(converted);
     });
     youtubeInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') createListing();
@@ -1012,6 +1065,7 @@
       if (!supplied) return;
       youtubeInput.value = supplied;
       clearButton.disabled = false;
+      updateQualitySetting();
     });
   </script>
 </body>

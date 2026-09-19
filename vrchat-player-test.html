@@ -465,6 +465,8 @@
       'kkinstagram.com',
       'dailymotion.com',
       'rutube.ru',
+      'bilibili.com',
+      'bsky.app',
       'x.com',
       'twitter.com',
       'tiktok.com',
@@ -487,7 +489,10 @@
       'rutube.ru',
       'xnxx.com',
       'abema.tv',
-      'tver.jp'
+      'tver.jp',
+      'x.com',
+      'twitter.com',
+      'twitcasting.tv'
     ];
 
     const hostMatches = (host, root) => host === root || host.endsWith(`.${root}`);
@@ -519,7 +524,9 @@
       const messages = {
         'This content is only available from Japan': 'この配信は日本国内からのみ取得できます。現在の配信サーバーには日本経路が必要です。',
         'This content requires a login or paid subscription': 'ログインまたは有料契約が必要な動画は再生できません。',
-        'The site did not provide a VRChat-compatible stream': '配信元からVRChatで再生できる映像・音声一体型データを取得できませんでした。'
+        'The site did not provide a VRChat-compatible stream': '配信元からVRChatで再生できる映像・音声一体型データを取得できませんでした。',
+        'This live channel is currently offline': 'このツイキャス配信は現在オフラインです。公開中の録画URLか、配信中のチャンネルで試してください。',
+        'This TwitCasting archive is unavailable': 'このツイキャス録画は配信元から取得できませんでした。公開状態または配信元の仕様を確認してください。'
       };
       return messages[detail] || detail;
     };
@@ -585,6 +592,7 @@
       if (!source) return false;
       const host = source.hostname.toLowerCase();
       return /\.m3u8$/i.test(source.pathname)
+        || (hostMatches(host, 'bsky.app') && new URL(convertedUrl).searchParams.has('quality'))
         || hlsSourceHostRoots.some((root) => hostMatches(host, root));
     };
 
