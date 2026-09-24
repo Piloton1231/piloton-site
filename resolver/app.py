@@ -30,6 +30,8 @@ from urllib.request import (
     urlopen,
 )
 
+from curl_cffi import requests as curl_requests
+from curl_cffi.curl import CURL_WRITEFUNC_ERROR
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -296,6 +298,7 @@ _media_inflight: dict[str, threading.Event] = {}
 MEDIA_CACHE_MAX_BYTES = 48_000_000
 _pornhub_refresh_cache: dict[str, tuple[int, str]] = {}
 _pornhub_refresh_lock = threading.Lock()
+_pornhub_session_state = threading.local()
 _pornhub_refresh_inflight: dict[str, threading.Event] = {}
 _stream_manifest_cache: OrderedDict[str, tuple[float, tuple[str, str]]] = OrderedDict()
 
@@ -2123,7 +2126,7 @@ def _current_pornhub_media_url(
     raise ValueError("Could not refresh the Pornhub media URL")
 
 
-def _read_pornhub_resource(
+def _read_pornhub_resource_urllib(
     upstream_url: str,
     range_header: str | None = None,
 ) -> tuple[bytes, int, str, dict[str, str]]:
@@ -2183,6 +2186,79 @@ def _read_pornhub_resource(
                 raise
         time.sleep(0.2)
     raise URLError("Pornhub media request failed")
+
+
+def _read_pornhub_resource(
+    upstream_url: str,
+    range_header: str | None = None,
+) -> tuple[bytes, int, str, dict[str, str]]:
+    """Reuse the residential proxy connection between adjacent media ranges."""
+    validated_url = _validate_pornhub_media_url(upstream_url)
+    requested_range = _bounded_tiktok_range(range_header, PORNHUB_MEDIA_CHUNK_BYTES)
+    session = getattr(_pornhub_session_state, "session", None)
+    if session is None:
+        session = curl_requests.Session()
+        _pornhub_session_state.session = session
+
+    chunks: list[bytes] = []
+    received = 0
+    oversized = False
+
+    def collect(chunk: bytes) -> int:
+        nonlocal received, oversized
+        if received + len(chunk) > PORNHUB_MEDIA_CHUNK_BYTES:
+            oversized = True
+            return CURL_WRITEFUNC_ERROR
+        chunks.append(chunk)
+        received += len(chunk)
+        return len(chunk)
+
+    try:
+        response = session.get(
+            validated_url,
+            headers={
+                "Accept": "*/*",
+                "Origin": "https://www.pornhub.com",
+                "Referer": "https://www.pornhub.com/",
+                "User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"],
+                "Range": requested_range,
+            },
+            proxy=YOUTUBE_PROXY_URL or None,
+            timeout=20,
+            max_redirects=3,
+            accept_encoding="identity",
+            content_callback=collect,
+        )
+    except curl_requests.RequestsError:
+        # Keep the original bounded reader for CDN responses that ignore Range,
+        # and as a fallback if the pooled connection is no longer usable.
+        session.close()
+        _pornhub_session_state.session = None
+        return _read_pornhub_resource_urllib(upstream_url, range_header)
+
+    _validate_pornhub_media_url(response.url)
+    if response.status_code == 200:
+        return _read_pornhub_resource_urllib(upstream_url, range_header)
+    if response.status_code in {408, 425, 429, 500, 502, 503, 504}:
+        return _read_pornhub_resource_urllib(upstream_url, range_header)
+    if response.status_code >= 400:
+        raise HTTPError(response.url, response.status_code, response.reason, response.headers, None)
+    if response.status_code != 206:
+        raise ValueError("Pornhub did not return a partial media response")
+    if oversized:
+        raise ValueError("Pornhub media response is too large")
+    content_length = response.headers.get("Content-Length")
+    if content_length and int(content_length) > PORNHUB_MEDIA_CHUNK_BYTES:
+        raise ValueError("Pornhub media response is too large")
+    body = b"".join(chunks)
+    if not body:
+        raise ValueError("Pornhub returned an empty media response")
+    forwarded_headers = {
+        name: response.headers[name]
+        for name in ("Accept-Ranges", "Content-Range", "ETag", "Last-Modified")
+        if response.headers.get(name)
+    }
+    return body, response.status_code, response.headers.get("Content-Type", "video/mp4"), forwarded_headers
 
 
 def _validate_player_hls_url(value: str) -> str:
