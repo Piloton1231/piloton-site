@@ -253,6 +253,7 @@ PLAYER_HLS_MEDIA_HOST_ROOTS = (
 )
 X_FALLBACK_API_HOST = "api.fxtwitter.com"
 X_FALLBACK_MAX_BYTES = 1_000_000
+X_FALLBACK_ATTEMPTS = 3
 X_STATUS_PATH_PATTERN = re.compile(
     r"/([A-Za-z0-9_]{1,32})/status/(\d{10,24})/?",
     re.IGNORECASE,
@@ -2400,14 +2401,25 @@ def _resolve_x_fallback_media(value: str, max_height: int | None = None) -> str:
         },
         method="GET",
     )
-    with urlopen(request, timeout=20) as response:
-        final_url = urlsplit(response.geturl())
-        if final_url.scheme != "https" or final_url.hostname != X_FALLBACK_API_HOST:
-            raise ValueError("Unexpected X fallback API redirect")
-        content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > X_FALLBACK_MAX_BYTES:
-            raise ValueError("X fallback response is too large")
-        body = response.read(X_FALLBACK_MAX_BYTES + 1)
+    body = b""
+    for attempt in range(X_FALLBACK_ATTEMPTS):
+        try:
+            with urlopen(request, timeout=20) as response:
+                final_url = urlsplit(response.geturl())
+                if final_url.scheme != "https" or final_url.hostname != X_FALLBACK_API_HOST:
+                    raise ValueError("Unexpected X fallback API redirect")
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > X_FALLBACK_MAX_BYTES:
+                    raise ValueError("X fallback response is too large")
+                body = response.read(X_FALLBACK_MAX_BYTES + 1)
+            break
+        except HTTPError as error:
+            if error.code not in {404, 408, 425, 429, 500, 502, 503, 504} or attempt + 1 >= X_FALLBACK_ATTEMPTS:
+                raise
+        except (URLError, TimeoutError, OSError):
+            if attempt + 1 >= X_FALLBACK_ATTEMPTS:
+                raise
+        time.sleep(0.25 * (2**attempt))
     if len(body) > X_FALLBACK_MAX_BYTES:
         raise ValueError("X fallback response is too large")
     payload = json.loads(body)

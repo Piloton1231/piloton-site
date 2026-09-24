@@ -2,6 +2,7 @@ import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
 import app
@@ -126,9 +127,20 @@ class StreamFeatureTests(unittest.TestCase):
                 return json.dumps(payload).encode()
 
         source = "https://x.com/zorstyx/status/2102558139359113712?s=20"
-        with patch.object(app, "urlopen", return_value=FakeResponse()):
-            self.assertTrue(app._resolve_x_fallback_media(source).endswith("/high.mp4"))
-            self.assertTrue(app._resolve_x_fallback_media(source, 360).endswith("/low.mp4"))
+        transient_error = HTTPError(
+            "https://api.fxtwitter.com/zorstyx/status/2102558139359113712",
+            404,
+            "Not Found",
+            {},
+            None,
+        )
+        with patch.object(
+            app, "urlopen", side_effect=[transient_error, FakeResponse(), FakeResponse()]
+        ) as open_request:
+            with patch.object(app.time, "sleep"):
+                self.assertTrue(app._resolve_x_fallback_media(source).endswith("/high.mp4"))
+                self.assertTrue(app._resolve_x_fallback_media(source, 360).endswith("/low.mp4"))
+        self.assertEqual(open_request.call_count, 3)
 
     def test_tver_local_segment_manifest(self):
         segment = {
