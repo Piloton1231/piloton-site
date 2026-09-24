@@ -251,6 +251,12 @@ PLAYER_HLS_MEDIA_HOST_ROOTS = (
     "twimg.com",
     "twitcasting.tv",
 )
+X_FALLBACK_API_HOST = "api.fxtwitter.com"
+X_FALLBACK_MAX_BYTES = 1_000_000
+X_STATUS_PATH_PATTERN = re.compile(
+    r"/([A-Za-z0-9_]{1,32})/status/(\d{10,24})/?",
+    re.IGNORECASE,
+)
 PLAYER_TEST_PREVIEW_SECONDS = max(
     4,
     min(30, int(os.getenv("PLAYER_TEST_PREVIEW_SECONDS", "12"))),
@@ -2372,6 +2378,76 @@ def _create_player_hls_manifest(upstream_url: str) -> str:
     return _rewrite_player_hls_manifest(_trim_player_hls_manifest(manifest), final_url)
 
 
+def _resolve_x_fallback_media(value: str, max_height: int | None = None) -> str:
+    """Resolve public X media that the unauthenticated extractor hides."""
+    parsed = urlsplit(value)
+    source_host = (parsed.hostname or "").lower().rstrip(".")
+    match = X_STATUS_PATH_PATTERN.fullmatch(parsed.path)
+    if (
+        parsed.scheme != "https"
+        or not any(_host_matches(source_host, root) for root in ("x.com", "twitter.com"))
+        or not match
+    ):
+        raise ValueError("Invalid X status URL")
+
+    username, status_id = match.groups()
+    endpoint = f"https://{X_FALLBACK_API_HOST}/{quote(username, safe='')}/status/{status_id}"
+    request = UrlRequest(
+        endpoint,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "PilotonVRChatResolver/1.0 (https://piloton.cc)",
+        },
+        method="GET",
+    )
+    with urlopen(request, timeout=20) as response:
+        final_url = urlsplit(response.geturl())
+        if final_url.scheme != "https" or final_url.hostname != X_FALLBACK_API_HOST:
+            raise ValueError("Unexpected X fallback API redirect")
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > X_FALLBACK_MAX_BYTES:
+            raise ValueError("X fallback response is too large")
+        body = response.read(X_FALLBACK_MAX_BYTES + 1)
+    if len(body) > X_FALLBACK_MAX_BYTES:
+        raise ValueError("X fallback response is too large")
+    payload = json.loads(body)
+    tweet = payload.get("tweet") if isinstance(payload, dict) else None
+    media = tweet.get("media") if isinstance(tweet, dict) else None
+    videos = media.get("videos") if isinstance(media, dict) else None
+    if not isinstance(videos, list):
+        raise StreamCompatibilityError("The X post did not provide public video media")
+
+    candidates: list[tuple[int, int, str]] = []
+    for video in videos:
+        if not isinstance(video, dict):
+            continue
+        formats = video.get("formats")
+        if not isinstance(formats, list):
+            formats = video.get("variants")
+        if not isinstance(formats, list):
+            continue
+        for media_format in formats:
+            if not isinstance(media_format, dict):
+                continue
+            media_url = media_format.get("url")
+            container = str(media_format.get("container") or media_format.get("content_type") or "")
+            if not isinstance(media_url, str) or "mp4" not in container.lower():
+                continue
+            media_url = _validate_direct_media_url(media_url)
+            media_host = (urlsplit(media_url).hostname or "").lower().rstrip(".")
+            if not _host_matches(media_host, "twimg.com"):
+                continue
+            resolution = re.search(r"/(\d{2,5})x(\d{2,5})/", urlsplit(media_url).path)
+            height = int(resolution.group(2)) if resolution else 0
+            bitrate = int(media_format.get("bitrate") or 0)
+            candidates.append((height, bitrate, media_url))
+
+    if not candidates:
+        raise StreamCompatibilityError("The X post did not provide an MP4 video")
+    preferred = [item for item in candidates if not max_height or not item[0] or item[0] <= max_height]
+    return max(preferred or candidates, key=lambda item: (item[0], item[1]))[2]
+
+
 def _trim_player_hls_manifest(manifest: str) -> str:
     lines = manifest.splitlines()
     if any(line.startswith("#EXT-X-STREAM-INF:") for line in lines):
@@ -2419,6 +2495,7 @@ def _extract_stream_media(
     is_tiktok = _host_matches(source_host, "tiktok.com")
     is_pornhub = _host_matches(source_host, "pornhub.com")
     is_bilibili = _host_matches(source_host, "bilibili.com")
+    is_x = any(_host_matches(source_host, root) for root in ("x.com", "twitter.com"))
     is_player_hls_source = player_mode and any(
         _host_matches(source_host, root)
         for root in (
@@ -2495,6 +2572,11 @@ def _extract_stream_media(
                     )
             break
         except DownloadError:
+            if is_x:
+                try:
+                    return "redirect", _resolve_x_fallback_media(value, max_height)
+                except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError, OSError):
+                    pass
             if extract_attempt + 1 >= extract_attempts:
                 raise
 

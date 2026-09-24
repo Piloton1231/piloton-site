@@ -1,3 +1,4 @@
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -82,6 +83,52 @@ class StreamFeatureTests(unittest.TestCase):
             with patch.object(app, "_read_pornhub_resource_urllib", return_value=expected) as fallback:
                 self.assertEqual(app._read_pornhub_resource(upstream, "bytes=0-"), expected)
         fallback.assert_called_once_with(upstream, "bytes=0-")
+
+    def test_x_fallback_selects_vrchat_compatible_mp4_quality(self):
+        payload = {
+            "tweet": {
+                "media": {
+                    "videos": [{
+                        "formats": [
+                            {
+                                "url": "https://video.twimg.com/amplify_video/example/vid/avc1/640x360/low.mp4",
+                                "container": "mp4",
+                                "bitrate": 832000,
+                            },
+                            {
+                                "url": "https://video.twimg.com/amplify_video/example/vid/avc1/1280x720/high.mp4",
+                                "container": "mp4",
+                                "bitrate": 2176000,
+                            },
+                            {
+                                "url": "https://video.twimg.com/amplify_video/example/pl/master.m3u8",
+                                "container": "m3u8",
+                            },
+                        ]
+                    }]
+                }
+            }
+        }
+
+        class FakeResponse:
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def geturl(self):
+                return "https://api.fxtwitter.com/zorstyx/status/2102558139359113712"
+
+            def read(self, _limit):
+                return json.dumps(payload).encode()
+
+        source = "https://x.com/zorstyx/status/2102558139359113712?s=20"
+        with patch.object(app, "urlopen", return_value=FakeResponse()):
+            self.assertTrue(app._resolve_x_fallback_media(source).endswith("/high.mp4"))
+            self.assertTrue(app._resolve_x_fallback_media(source, 360).endswith("/low.mp4"))
 
     def test_tver_local_segment_manifest(self):
         segment = {
