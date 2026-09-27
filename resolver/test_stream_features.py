@@ -9,6 +9,16 @@ import app
 
 
 class StreamFeatureTests(unittest.TestCase):
+    def test_vrchat_head_routes_are_registered(self):
+        for path in ("/stream", "/stream/pornhub/media.mp4"):
+            self.assertTrue(
+                any(
+                    route.path == path and route.methods and "HEAD" in route.methods
+                    for route in app.app.routes
+                ),
+                path,
+            )
+
     def test_new_source_hosts(self):
         for source in (
             "https://bsky.app/profile/zapyzapzap.bsky.social/post/3mvsmf3d4jk2i",

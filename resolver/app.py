@@ -3452,6 +3452,7 @@ async def health() -> dict[str, str | bool | int]:
     }
 
 
+@app.head("/stream")
 @app.get("/stream")
 async def resolve_stream(
     request: Request,
@@ -3840,6 +3841,7 @@ async def proxy_rule34video_media(
     )
 
 
+@app.head("/stream/pornhub/media.mp4")
 @app.get("/stream/pornhub/media.mp4")
 async def proxy_pornhub_media(
     request: Request,
