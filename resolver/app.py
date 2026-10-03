@@ -3500,7 +3500,9 @@ def _get_redgifs_token(force_refresh: bool = False) -> str:
         return token
 
 
-def _resolve_redgifs_media(media_id: str) -> tuple[str, str, str]:
+def _resolve_redgifs_media(
+    media_id: str,
+) -> tuple[str, str, str, str | None, int | None, int | None]:
     payload = None
     for attempt in range(2):
         token = _get_redgifs_token(force_refresh=attempt == 1)
@@ -3535,7 +3537,17 @@ def _resolve_redgifs_media(media_id: str) -> tuple[str, str, str]:
     ):
         raise ValueError("Unexpected RedGifs media URL")
 
-    return resolved_id, quality, direct_url
+    username = gif.get("userName")
+    if not isinstance(username, str) or not username.strip():
+        username = None
+    likes = gif.get("likes")
+    if not isinstance(likes, int):
+        likes = None
+    views = gif.get("views")
+    if not isinstance(views, int):
+        views = None
+
+    return resolved_id, quality, direct_url, username, likes, views
 
 
 @app.get("/health")
@@ -4280,7 +4292,9 @@ async def resolve_redgifs(
 
     try:
         async with _redgifs_slots:
-            resolved_id, quality, direct_url = await asyncio.to_thread(_resolve_redgifs_media, media_id)
+            resolved_id, quality, direct_url, username, likes, views = await asyncio.to_thread(
+                _resolve_redgifs_media, media_id
+            )
     except HTTPError as error:
         if error.code == 404:
             raise HTTPException(status_code=404, detail="RedGifs video was not found") from error
@@ -4291,6 +4305,13 @@ async def resolve_redgifs(
         raise HTTPException(status_code=502, detail="Could not resolve the RedGifs video") from error
 
     return JSONResponse(
-        {"id": resolved_id, "quality": quality, "url": direct_url},
+        {
+            "id": resolved_id,
+            "quality": quality,
+            "url": direct_url,
+            "username": username,
+            "likes": likes,
+            "views": views,
+        },
         headers={"Cache-Control": "no-store"},
     )
