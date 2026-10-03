@@ -231,6 +231,7 @@ RULE34VIDEO_MEDIA_PROXY_BASE_URL = (
 )
 PORNHUB_MEDIA_PROXY_BASE_URL = "https://video.piloton.cc/stream/pornhub/media.mp4?token="
 BILIBILI_MUX_BASE_URL = "https://video.piloton.cc/stream/bilibili/mux.mp4?token="
+RUTUBE_MUX_BASE_URL = "https://video.piloton.cc/stream/rutube/mux.mp4?token="
 PLAYER_HLS_PROXY_BASE_URL = "https://video.piloton.cc/stream/player/media"
 TIKTOK_MEDIA_HOST_ROOTS = (
     "tiktok.com",
@@ -244,6 +245,7 @@ RULE34VIDEO_MEDIA_HOST_ROOTS = (
 )
 PORNHUB_MEDIA_HOST_ROOTS = ("phncdn.com",)
 BILIBILI_MEDIA_HOST_ROOTS = ("bilivideo.com", "bilibili.com")
+RUTUBE_MEDIA_HOST_ROOTS = ("rutube.ru", "rtbcdn.ru")
 PLAYER_HLS_MEDIA_HOST_ROOTS = (
     "dmcdn.net",
     "xnxx-cdn.com",
@@ -1491,6 +1493,77 @@ def _start_bilibili_mux_process(video_url: str, audio_url: str) -> subprocess.Po
     )
 
 
+def _validate_rutube_media_url(value: str) -> str:
+    value = _validate_direct_media_url(value)
+    parsed = urlsplit(value)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not any(_host_matches(host, root) for root in RUTUBE_MEDIA_HOST_ROOTS):
+        raise ValueError("Unexpected Rutube media host")
+    if not parsed.path.lower().endswith(".m3u8"):
+        raise ValueError("Rutube did not provide an HLS stream")
+    return value
+
+
+def _encode_rutube_mux_token(upstream_url: str) -> str:
+    payload = json.dumps(
+        [
+            _validate_rutube_media_url(upstream_url),
+            int(time.time()) + STREAM_TOKEN_SECONDS,
+        ],
+        separators=(",", ":"),
+    ).encode()
+    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+
+
+def _decode_rutube_mux_token(token: str) -> str:
+    if len(token) > 12000 or not token.startswith("z"):
+        raise HTTPException(status_code=400, detail="Invalid Rutube mux token")
+    try:
+        encoded = token[1:]
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + padding)))
+    except (ValueError, TypeError, json.JSONDecodeError, zlib.error) as error:
+        raise HTTPException(status_code=400, detail="Invalid Rutube mux token") from error
+    if not isinstance(payload, list) or len(payload) != 2:
+        raise HTTPException(status_code=400, detail="Invalid Rutube mux token")
+    upstream_url, expires_at = payload
+    if (
+        not isinstance(upstream_url, str)
+        or not isinstance(expires_at, int)
+        or not int(time.time()) <= expires_at <= int(time.time()) + STREAM_TOKEN_SECONDS
+    ):
+        raise HTTPException(status_code=400, detail="Expired or invalid Rutube mux token")
+    try:
+        return _validate_rutube_media_url(upstream_url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid Rutube mux target") from error
+
+
+def _rutube_mux_url(upstream_url: str) -> str:
+    token = _encode_rutube_mux_token(upstream_url)
+    return f"{RUTUBE_MUX_BASE_URL}{quote(token, safe='')}"
+
+
+def _start_rutube_mux_process(upstream_url: str) -> subprocess.Popen:
+    command = [
+        _ffmpeg_executable(),
+        "-nostdin", "-hide_banner", "-loglevel", "error", "-rw_timeout", "20000000",
+        "-user_agent", NICONICO_FRONTEND_HEADERS["User-Agent"],
+        "-fflags", "+genpts", "-i", _validate_rutube_media_url(upstream_url),
+        "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
+        "-c:a", "aac", "-profile:a", "aac_low", "-ar", "48000", "-ac", "2",
+        "-b:a", "160k", "-af", "aresample=async=1:first_pts=0",
+        "-map_metadata", "-1", "-avoid_negative_ts", "make_zero",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-frag_duration", "2000000", "-max_interleave_delta", "0",
+        "-flush_packets", "1", "-f", "mp4", "pipe:1",
+    ]
+    return subprocess.Popen(
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, bufsize=0,
+    )
+
+
 def _encode_abema_key_token(key: bytes) -> str:
     if len(key) != 16:
         raise ValueError("ABEMA returned an invalid video key")
@@ -2507,6 +2580,7 @@ def _extract_stream_media(
     is_tiktok = _host_matches(source_host, "tiktok.com")
     is_pornhub = _host_matches(source_host, "pornhub.com")
     is_bilibili = _host_matches(source_host, "bilibili.com")
+    is_rutube = _host_matches(source_host, "rutube.ru")
     is_x = any(_host_matches(source_host, root) for root in ("x.com", "twitter.com"))
     is_player_hls_source = player_mode and any(
         _host_matches(source_host, root)
@@ -2597,6 +2671,30 @@ def _extract_stream_media(
         raise ValueError("No stream information was returned")
     if is_bilibili:
         return "redirect", _bilibili_mux_url(info, max_height or 720)
+    if is_rutube:
+        rutube_hls_url = (
+            direct_url
+            if isinstance(direct_url, str)
+            and (
+                str(info.get("protocol", "")).startswith("m3u8")
+                or urlsplit(direct_url).path.lower().endswith(".m3u8")
+            )
+            else next(
+                (
+                    item.get("url")
+                    for item in info.get("formats", [])
+                    if isinstance(item, dict)
+                    and isinstance(item.get("url"), str)
+                    and str(item.get("protocol", "")).startswith("m3u8")
+                    and item.get("vcodec") != "none"
+                    and item.get("acodec") != "none"
+                ),
+                None,
+            )
+        )
+        if not isinstance(rutube_hls_url, str):
+            raise StreamCompatibilityError("Rutube did not provide a combined HLS stream")
+        return "redirect", _rutube_mux_url(rutube_hls_url)
     if is_tiktok:
         progressive_url = _select_tiktok_progressive(info)
         if progressive_url:
@@ -4033,6 +4131,46 @@ async def stream_muxed_bilibili_media(
             "Content-Disposition": 'inline; filename="bilibili.mp4"',
             "X-Content-Type-Options": "nosniff",
             "X-Resolver-Path": "original-bilibili-muxed-media",
+        },
+    )
+
+
+@app.head("/stream/rutube/mux.mp4")
+async def head_muxed_rutube_media(
+    token: str = Query(min_length=1, max_length=12000),
+) -> Response:
+    _decode_rutube_mux_token(token)
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            "Content-Type": "video/mp4",
+            "X-Content-Type-Options": "nosniff",
+            "X-Resolver-Path": "original-rutube-compatible-media",
+        },
+    )
+
+
+@app.get("/stream/rutube/mux.mp4")
+async def stream_muxed_rutube_media(
+    token: str = Query(min_length=1, max_length=12000),
+) -> StreamingResponse:
+    upstream_url = _decode_rutube_mux_token(token)
+    try:
+        process = await asyncio.to_thread(_start_rutube_mux_process, upstream_url)
+    except (OSError, ValueError) as error:
+        print(f"Rutube mux startup failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=502, detail="Could not start the Rutube stream") from error
+    return StreamingResponse(
+        _iter_niconico_mux(process, "Rutube"),
+        media_type="video/mp4",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'inline; filename="rutube.mp4"',
+            "X-Content-Type-Options": "nosniff",
+            "X-Resolver-Path": "original-rutube-compatible-media",
         },
     )
 
