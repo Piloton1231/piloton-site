@@ -4292,7 +4292,7 @@ async def youtube_relay(
     return StreamingResponse(_iter_youtube_relay(upstream), status_code=upstream.status, headers=headers)
 
 
-@app.get("/resolve")
+@app.api_route("/resolve", methods=["GET", "HEAD"])
 async def resolve_video(
     request: Request,
     url: str = Query(min_length=1, max_length=2048),
@@ -4300,6 +4300,13 @@ async def resolve_video(
     video_url = _validate_youtube_url(url)
     client = _request_client_key(request)
     _check_rate_limit(client)
+
+    if request.headers.get("origin", "").lower() not in SITE_ORIGINS:
+        return RedirectResponse(
+            "https://video.piloton.cc/youtube/relay.mp4?" + urlencode({"url": video_url}),
+            status_code=307,
+            headers={"Cache-Control": "no-store", "X-Resolver-Path": "youtube-relay"},
+        )
 
     now = time.monotonic()
     cached = _cache.get(video_url)
