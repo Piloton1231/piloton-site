@@ -4220,6 +4220,78 @@ async def proxy_niconico_media_with_extension(
     return await _proxy_niconico_media_response(request, token)
 
 
+def _open_youtube_relay(upstream_url: str, range_header: str | None, method: str):
+    if not YOUTUBE_PROXY_URL:
+        raise ValueError("YouTube relay requires a proxy")
+    headers = {"Accept-Encoding": "identity", "User-Agent": NICONICO_FRONTEND_HEADERS["User-Agent"]}
+    if range_header:
+        if not re.fullmatch(r"bytes=(?:[0-9]+-[0-9]*|-[0-9]+)", range_header):
+            raise HTTPException(status_code=416, detail="Unsupported byte range")
+        headers["Range"] = range_header
+    opener = build_opener(ProxyHandler({"https": YOUTUBE_PROXY_URL}))
+    return opener.open(UrlRequest(upstream_url, headers=headers, method=method), timeout=20)
+
+
+def _iter_youtube_relay(upstream):
+    try:
+        while True:
+            chunk = upstream.read(64 * 1024)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        upstream.close()
+
+
+@app.api_route("/youtube/relay.mp4", methods=["GET", "HEAD"])
+async def youtube_relay(
+    request: Request,
+    url: str = Query(min_length=1, max_length=2048),
+) -> Response:
+    video_url = _validate_youtube_url(url)
+    cached = _cache.get(video_url)
+    upstream = None
+    try:
+        for attempt in range(2):
+            if attempt == 0 and cached and cached[0] > time.monotonic():
+                direct_url = cached[1]
+            else:
+                async with _extract_slots:
+                    direct_url = await asyncio.to_thread(_extract_media_url, video_url)
+                _cache[video_url] = (time.monotonic() + CACHE_SECONDS, direct_url)
+            try:
+                upstream = await asyncio.to_thread(
+                    _open_youtube_relay, direct_url, request.headers.get("range"), request.method
+                )
+                break
+            except HTTPError as error:
+                if attempt == 0 and error.code in {401, 403, 410}:
+                    error.close()
+                    continue
+                raise
+    except HTTPError as error:
+        status = 416 if error.code == 416 else 502
+        error.close()
+        raise HTTPException(status_code=status, detail="YouTube relay upstream rejected the request") from error
+    except (DownloadError, URLError, TimeoutError, ValueError, OSError) as error:
+        raise HTTPException(status_code=502, detail="Could not read YouTube relay") from error
+    headers = {
+        "Content-Type": "video/mp4",
+        "Access-Control-Allow-Origin": "*",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+        "X-Resolver-Path": "youtube-proxy-relay",
+    }
+    for name in ("Content-Length", "Content-Range"):
+        if upstream.headers.get(name):
+            headers[name] = upstream.headers[name]
+    if request.method == "HEAD":
+        status = upstream.status
+        upstream.close()
+        return Response(status_code=status, headers=headers)
+    return StreamingResponse(_iter_youtube_relay(upstream), status_code=upstream.status, headers=headers)
+
+
 @app.get("/resolve")
 async def resolve_video(
     request: Request,
