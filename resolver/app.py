@@ -16,6 +16,7 @@ import threading
 import time
 import zlib
 import unicodedata
+from pykakasi import kakasi
 from difflib import SequenceMatcher
 from collections import OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
@@ -4373,6 +4374,11 @@ def _music_text(value: str) -> str:
     return re.sub(r"[^\w]", "", unicodedata.normalize("NFKC", value).casefold())
 
 
+@lru_cache(maxsize=2048)
+def _music_romaji(value: str) -> str:
+    return _music_text(''.join(part['hepburn'] for part in kakasi().convert(value)))
+
+
 def _spotify_track(value: str) -> dict:
     parsed = urlsplit(value)
     match = re.fullmatch(r"/(?:intl-[a-z]+/)?track/([A-Za-z0-9]{22})/?", parsed.path)
@@ -4420,7 +4426,7 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
         name = _music_text(title)
         channel = str(entry.get("channel") or entry.get("uploader") or "")
         artist_channel = any(_music_text(channel) in {
-            _music_text(a), _music_text(a + 'official'), _music_text(a + 'vevo')
+            _music_text(a), _music_text(a + 'official'), _music_text(a + 'vevo'), _music_text(a + ' - Topic')
         } for a in track['artists'])
         bare_title = name
         for artist in track['artists']:
@@ -4431,7 +4437,10 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
         for artist in track['artists']:
             stripped_title = stripped_title.replace(_music_text(artist), '')
         official_artist = bool(artist_channel and entry.get('channel_is_verified'))
-        audio_version = bool(re.search(r'\baudio\b|\blyrics?\b|音源|歌詞|remaster|visualizer', title, re.I))
+        description = str(entry.get('description') or '')
+        audio_version = bool(re.search(r'\baudio\b|\blyrics?\b|音源|歌詞|remaster|visualizer', title, re.I)
+                             or 'provided to youtube by' in description.lower()
+                             or channel.lower().endswith(' - topic'))
         official_mv = bool(official_artist and not audio_version and (
             bare_title == song or stripped_title == song or re.search(
             r'official\s+(?:music\s+)?video|公式.*(?:MV|ミュージックビデオ)', title, re.I)))
@@ -4440,20 +4449,27 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
             continue
         title_score = 1.0 if song in name else SequenceMatcher(None, song, name).ratio()
         artist_match = any(_music_text(a) in _music_text(title + channel) for a in track["artists"])
-        if song not in name or not artist_match:
+        romaji_match = bool(official_artist and _music_romaji(track['title']) in _music_romaji(title))
+        if (song not in name and not romaji_match) or not artist_match:
             continue
+        if romaji_match:
+            title_score = 1.0
         score = title_score * 60 + 25 + 15 * (1 - delta / max(allowed_delta, 1))
         if prefer_mv and official_mv:
             score += 100
+        album_name = track.get('album') or ''
+        album_match = bool(album_name and _music_text(album_name) in _music_text(description))
+        if official_artist and album_match:
+            score += 20
         # Source authority precedes tiny duration differences, not just a bonus.
         priority = (2 if official_mv else 1 if official_artist else 0) if prefer_mv else 0
         candidates.append({"id": entry["id"], "title": title, "duration": duration, "priority": priority,
-                           "difference": round(delta, 1), "channel": channel, "score": round(score, 1), "official_mv": official_mv})
+                           "difference": round(delta, 1), "channel": channel, "score": round(score, 1), "official_mv": official_mv, "album_match": album_match, "romaji_match": romaji_match})
     return sorted(candidates, key=lambda item: (item['priority'], item["score"]), reverse=True)[:5]
 
 
-def _match_spotify(value: str, exclude_covers: bool, tolerance: int, prefer_mv: bool = True) -> dict:
-    track = _spotify_track(value)
+def _match_spotify(value: str, exclude_covers: bool, tolerance: int, prefer_mv: bool = True, album: str = '') -> dict:
+    track = {**_spotify_track(value), 'album': album}
     options = {"extract_flat": True, "skip_download": True, "quiet": True,
                "no_warnings": True, "socket_timeout": 15, "retries": 1, "extractor_retries": 1}
     if YOUTUBE_PROXY_URL:
@@ -4464,6 +4480,9 @@ def _match_spotify(value: str, exclude_covers: bool, tolerance: int, prefer_mv: 
         if prefer_mv:
             extra = downloader.extract_info("ytsearch8:" + " ".join(track["artists"]) + " " + track["title"] + " official music video", download=False)
             pool.extend(extra.get("entries") or [])
+        if album:
+            extra = downloader.extract_info('ytsearch8:' + ' '.join(track['artists']) + ' ' + track['title'] + ' ' + album, download=False)
+            pool.extend(extra.get('entries') or [])
     unique = {item['id']: item for item in pool if isinstance(item, dict) and item.get('id')}
     entries = _rank_spotify_candidates(track, list(unique.values()), exclude_covers, tolerance, prefer_mv)
     return {"track": track, "entries": entries}
@@ -4471,11 +4490,12 @@ def _match_spotify(value: str, exclude_covers: bool, tolerance: int, prefer_mv: 
 
 @app.get("/spotify/match")
 async def spotify_match(request: Request, url: str = Query(min_length=1, max_length=2048),
-                        exclude_covers: bool = True, tolerance: int = Query(default=15, ge=0, le=120), prefer_mv: bool = True):
+                        exclude_covers: bool = True, tolerance: int = Query(default=15, ge=0, le=120), prefer_mv: bool = True,
+                        album: str = Query(default='', max_length=200)):
     _check_rate_limit(_request_client_key(request))
     try:
         async with _metadata_slots:
-            result = await asyncio.to_thread(_match_spotify, url, exclude_covers, tolerance, prefer_mv)
+            result = await asyncio.to_thread(_match_spotify, url, exclude_covers, tolerance, prefer_mv, album)
     except HTTPException:
         raise
     except (ValueError, KeyError, TypeError, OSError, DownloadError) as error:

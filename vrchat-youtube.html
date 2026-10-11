@@ -980,6 +980,7 @@
             const album = await albumResponse.json();
             if (!albumResponse.ok) throw new Error(album.detail || 'アルバムを取得できませんでした。');
             const found = [], missing = [];
+            params.set('album', album.title || '');
             for (const track of album.tracks) {
               inputMessage.textContent = `${track.position}/${album.tracks.length}曲を照合中：${track.title}`;
               params.set('url', track.url);

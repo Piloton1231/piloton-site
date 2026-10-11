@@ -9,6 +9,18 @@ import app
 
 
 class StreamFeatureTests(unittest.TestCase):
+    def test_romaji_official_album_audio_beats_reupload(self):
+        track = {'title':'クダリ','artists':['Mrs. GREEN APPLE'],'duration':267,'album':'Attitude'}
+        entries = [
+            {'id':'WX_XvmoZhQQ','title':'クダリ - Mrs. GREEN APPLE 歌詞動画','duration':267,'channel':'Other'},
+            {'id':'j7MPiIabcbE','title':'Kudari','duration':267,'channel':'Mrs. GREEN APPLE',
+             'channel_is_verified':True,'description':'Provided to YouTube by Universal Music Group Kudari Attitude'},
+        ]
+        result = app._rank_spotify_candidates(track, entries, True, 15)
+        self.assertEqual(result[0]['id'], 'j7MPiIabcbE')
+        self.assertTrue(result[0]['album_match'])
+        self.assertFalse(result[0]['official_mv'])
+
     def test_official_translated_title_beats_closer_live_recording(self):
         track = {'title':'インフェルノ', 'artists':['Mrs. GREEN APPLE'], 'duration':211.6}
         entries = [

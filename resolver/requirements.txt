@@ -3,3 +3,4 @@ uvicorn[standard]==0.52.4
 yt-dlp[default,curl-cffi]==2026.8.19
 quickjs-ng==0.16.0.1
 imageio-ffmpeg==0.6.0
+pykakasi==2.3.0
