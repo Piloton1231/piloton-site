@@ -550,6 +550,7 @@
       </div>
       <details class="quality-setting">
         <summary>Spotify → YouTube の検索設定（曲単体リンク対応）</summary>
+        <label><input type="checkbox" id="spotify-prefer-mv" checked style="width:auto"> 公式MVを優先（確認できた公式MVは時間差を最大60秒まで許容）</label>
         <label><input type="checkbox" id="spotify-no-covers" checked style="width:auto"> 歌ってみた・カバー・カラオケなどを除外</label>
         <label for="spotify-tolerance">Spotifyとの再生時間差</label>
         <select id="spotify-tolerance"><option value="5">±5秒</option><option value="15" selected>±15秒</option><option value="30">±30秒</option><option value="60">±60秒（MV向け）</option></select>
@@ -973,7 +974,7 @@
         inputMessage.textContent = 'Spotifyの曲情報とYouTube候補を照合しています…';
         inputMessage.className = 'message';
         try {
-          const params = new URLSearchParams({url: value, exclude_covers: String(document.getElementById('spotify-no-covers').checked), tolerance: document.getElementById('spotify-tolerance').value});
+          const params = new URLSearchParams({url: value, prefer_mv: String(document.getElementById('spotify-prefer-mv').checked), exclude_covers: String(document.getElementById('spotify-no-covers').checked), tolerance: document.getElementById('spotify-tolerance').value});
           const response = await fetch(`https://video.piloton.cc/spotify/match?${params}`, {cache:'no-store'});
           const data = await response.json();
           if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '曲情報を取得できませんでした。');
@@ -985,7 +986,7 @@
           [...resultList.children].forEach((card,index) => {
             const entry = data.entries[index];
             const note = document.createElement('p');
-            note.textContent = `${entry.channel} ／ ${clock(entry.duration)} ／ 時間差 ${entry.difference}秒`;
+            note.textContent = `${entry.official_mv ? '公式MV候補 ／ ' : ''}${entry.channel} ／ ${clock(entry.duration)} ／ 時間差 ${entry.difference}秒`;
             card.prepend(note);
             card.append(createLinkBlock('YouTube URL', `https://www.youtube.com/watch?v=${entry.id}`, 'YouTube URLをコピー', 'copy-youtube', index));
           });

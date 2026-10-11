@@ -4366,7 +4366,7 @@ def _spotify_track(value: str) -> dict:
     return _cache_metadata("spotify:" + track_id, {"title": title, "artists": artists, "duration": duration / 1000})
 
 
-def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, tolerance: int) -> list:
+def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, tolerance: int, prefer_mv: bool = True) -> list:
     candidates = []
     excluded = re.compile(r"歌ってみた|カバー|弾いてみた|カラオケ|\b(?:cover|karaoke|instrumental|nightcore|sped\s*up|slowed)\b", re.I)
     for entry in entries:
@@ -4379,22 +4379,30 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
         if exclude_covers and excluded.search(title) and not excluded.search(track["title"]):
             continue
         delta = abs(duration - track["duration"])
-        if delta > tolerance:
-            continue
         song = _music_text(track["title"])
         name = _music_text(title)
         channel = str(entry.get("channel") or entry.get("uploader") or "")
+        artist_channel = any(_music_text(channel) in {
+            _music_text(a), _music_text(a + 'official'), _music_text(a + 'vevo')
+        } for a in track['artists'])
+        official_mv = bool(artist_channel and entry.get('channel_is_verified') and re.search(
+            r'official\s+(?:music\s+)?video|公式.*(?:MV|ミュージックビデオ)', title, re.I))
+        allowed_delta = max(tolerance, 60) if prefer_mv and official_mv else tolerance
+        if delta > allowed_delta:
+            continue
         title_score = 1.0 if song in name else SequenceMatcher(None, song, name).ratio()
         artist_match = any(_music_text(a) in _music_text(title + channel) for a in track["artists"])
         if title_score < 0.45 or not artist_match:
             continue
-        score = title_score * 60 + 25 + 15 * (1 - delta / max(tolerance, 1))
+        score = title_score * 60 + 25 + 15 * (1 - delta / max(allowed_delta, 1))
+        if prefer_mv and official_mv:
+            score += 100
         candidates.append({"id": entry["id"], "title": title, "duration": duration,
-                           "difference": round(delta, 1), "channel": channel, "score": round(score, 1)})
+                           "difference": round(delta, 1), "channel": channel, "score": round(score, 1), "official_mv": official_mv})
     return sorted(candidates, key=lambda item: item["score"], reverse=True)[:5]
 
 
-def _match_spotify(value: str, exclude_covers: bool, tolerance: int) -> dict:
+def _match_spotify(value: str, exclude_covers: bool, tolerance: int, prefer_mv: bool = True) -> dict:
     track = _spotify_track(value)
     options = {"extract_flat": True, "skip_download": True, "quiet": True,
                "no_warnings": True, "socket_timeout": 15, "retries": 1, "extractor_retries": 1}
@@ -4402,17 +4410,22 @@ def _match_spotify(value: str, exclude_covers: bool, tolerance: int) -> dict:
         options["proxy"] = YOUTUBE_PROXY_URL
     with YoutubeDL(options) as downloader:
         info = downloader.extract_info("ytsearch12:" + " ".join(track["artists"]) + " " + track["title"], download=False)
-    entries = _rank_spotify_candidates(track, info.get("entries") or [], exclude_covers, tolerance)
+        pool = list(info.get("entries") or [])
+        if prefer_mv:
+            extra = downloader.extract_info("ytsearch8:" + " ".join(track["artists"]) + " " + track["title"] + " official music video", download=False)
+            pool.extend(extra.get("entries") or [])
+    unique = {item['id']: item for item in pool if isinstance(item, dict) and item.get('id')}
+    entries = _rank_spotify_candidates(track, list(unique.values()), exclude_covers, tolerance, prefer_mv)
     return {"track": track, "entries": entries}
 
 
 @app.get("/spotify/match")
 async def spotify_match(request: Request, url: str = Query(min_length=1, max_length=2048),
-                        exclude_covers: bool = True, tolerance: int = Query(default=15, ge=0, le=120)):
+                        exclude_covers: bool = True, tolerance: int = Query(default=15, ge=0, le=120), prefer_mv: bool = True):
     _check_rate_limit(_request_client_key(request))
     try:
         async with _metadata_slots:
-            result = await asyncio.to_thread(_match_spotify, url, exclude_covers, tolerance)
+            result = await asyncio.to_thread(_match_spotify, url, exclude_covers, tolerance, prefer_mv)
     except HTTPException:
         raise
     except (ValueError, KeyError, TypeError, OSError, DownloadError) as error:
