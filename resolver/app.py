@@ -4376,7 +4376,13 @@ def _music_text(value: str) -> str:
 
 @lru_cache(maxsize=2048)
 def _music_romaji(value: str) -> str:
-    return _music_text(''.join(part['hepburn'] for part in kakasi().convert(value)))
+    value = _music_text(''.join(part['hepburn'] for part in kakasi().convert(value)))
+    # Normalize common Hepburn/Kunrei spellings, not arbitrary fuzzy matches.
+    for pattern, replacement in ((r'jya', 'ja'), (r'jyu', 'ju'), (r'jyo', 'jo'),
+                                 (r'sya', 'sha'), (r'syu', 'shu'), (r'syo', 'sho'),
+                                 (r'tya', 'cha'), (r'tyu', 'chu'), (r'tyo', 'cho')):
+        value = re.sub(pattern, replacement, value)
+    return value
 
 
 def _spotify_track(value: str) -> dict:
@@ -4436,7 +4442,18 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
         stripped_title = _music_text(title_without_brackets)
         for artist in track['artists']:
             stripped_title = stripped_title.replace(_music_text(artist), '')
-        official_artist = bool(artist_channel and entry.get('channel_is_verified'))
+        # UNIVERSAL's own website links /user/universalmusicjapan. Pin the
+        # resolved channel ID rather than trusting a label-like display name.
+        official_label = bool(entry.get('channel_is_verified') and
+                              entry.get('channel_id') == 'UCl2aT0nRejTCQO_LHZAftBw' and
+                              any(_music_text(a) in name for a in track['artists']))
+        official_artist = bool(artist_channel and entry.get('channel_is_verified')) or official_label
+        # Hard eligibility gate: never auto-substitute a fan upload when the
+        # official candidate is missing, differently spelled, or filtered out.
+        if not official_artist:
+            continue
+        if re.search(r'\b(?:MAD|AMV|fanmade|fan\s*edit)\b|切り抜き|無断転載', title, re.I):
+            continue
         description = str(entry.get('description') or '')
         audio_version = bool(re.search(r'\baudio\b|\blyrics?\b|音源|歌詞|remaster|visualizer', title, re.I)
                              or 'provided to youtube by' in description.lower()
@@ -4464,7 +4481,9 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
         # Source authority precedes tiny duration differences, not just a bonus.
         priority = (2 if official_mv else 1 if official_artist else 0) if prefer_mv else 0
         candidates.append({"id": entry["id"], "title": title, "duration": duration, "priority": priority,
-                           "difference": round(delta, 1), "channel": channel, "score": round(score, 1), "official_mv": official_mv, "album_match": album_match, "romaji_match": romaji_match})
+                           "difference": round(delta, 1), "channel": channel, "channel_id": entry.get('channel_id'),
+                           "official_source": True, "source_reason": "verified_label_channel" if official_label else "verified_artist_channel",
+                           "score": round(score, 1), "official_mv": official_mv, "album_match": album_match, "romaji_match": romaji_match})
     return sorted(candidates, key=lambda item: (item['priority'], item["score"]), reverse=True)[:5]
 
 

@@ -9,6 +9,15 @@ import app
 
 
 class StreamFeatureTests(unittest.TestCase):
+    def test_label_requires_verified_channel_id_and_artist_credit(self):
+        track = {'title':'How-to','artists':['Mrs. GREEN APPLE'],'duration':237}
+        entry = {'id':'e1ljAkVuQCA','title':'Mrs. GREEN APPLE - How-to','duration':237,
+                 'channel':'UNIVERSAL MUSIC JAPAN','channel_is_verified':True,
+                 'channel_id':'UCl2aT0nRejTCQO_LHZAftBw'}
+        self.assertEqual(app._rank_spotify_candidates(track,[entry],True,15)[0]['id'],entry['id'])
+        self.assertEqual(app._rank_spotify_candidates(track,[{**entry,'channel_id':'fake'}],True,15),[])
+        self.assertEqual(app._rank_spotify_candidates(track,[{**entry,'title':'Another Artist - How-to'}],True,15),[])
+
     def test_romaji_official_album_audio_beats_reupload(self):
         track = {'title':'クダリ','artists':['Mrs. GREEN APPLE'],'duration':267,'album':'Attitude'}
         entries = [
@@ -41,9 +50,30 @@ class StreamFeatureTests(unittest.TestCase):
             {"id": "abcdefghijm", "title": "Artist Test Song", "duration": 290},
             {"id": "abcdefghijn", "title": "Someone Else Test Song", "duration": 200},
         ]
+        for entry in entries[:3]:
+            entry.update(channel='Artist', channel_is_verified=True)
         result = app._rank_spotify_candidates(track, entries, True, 15)
         self.assertEqual([entry["id"] for entry in result], ["abcdefghijl"])
         self.assertEqual(len(app._rank_spotify_candidates(track, entries, False, 15)), 2)
+
+    def test_no_unofficial_fallback_even_when_mv_preference_disabled(self):
+        track = {'title':'嘘じゃないよ','artists':['Mrs. GREEN APPLE'],'duration':286}
+        fan = {'id':'ONoV4KA9M60','title':'【MAD】君の名は×嘘じゃないよ Mrs.green Apple',
+               'duration':286,'channel':'クモズ','channel_is_verified':True}
+        spoof = {**fan, 'channel':'Mrs. GREEN APPLE', 'channel_is_verified':False}
+        for prefer_mv in (True, False):
+            self.assertEqual(app._rank_spotify_candidates(track,[fan,spoof],False,60,prefer_mv), [])
+
+    def test_jya_ja_spelling_and_official_audio_selection(self):
+        self.assertEqual(app._music_romaji('嘘じゃないよ'), app._music_romaji('Usojya Naiyo'))
+        track = {'title':'嘘じゃないよ','artists':['Mrs. GREEN APPLE'],'duration':286,'album':'Attitude'}
+        entry = {'id':'ZjjY2n_vwc0','title':'Usojya Naiyo','duration':286,
+                 'channel':'Mrs. GREEN APPLE','channel_is_verified':True,
+                 'description':'Provided to YouTube by Universal Music Group Usojya Naiyo Attitude'}
+        result = app._rank_spotify_candidates(track,[entry],True,15)
+        self.assertEqual(result[0]['id'],'ZjjY2n_vwc0')
+        self.assertTrue(result[0]['official_source'])
+        self.assertTrue(result[0]['album_match'])
 
     def test_spotify_rejects_non_track_or_external_urls(self):
         for url in ("https://example.com/track/0Lr4kGOYn9l83EjuK6cZFQ",

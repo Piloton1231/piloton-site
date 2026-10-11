@@ -550,6 +550,7 @@
       </div>
       <details class="quality-setting">
         <summary>Spotify → YouTube の検索設定（曲・アルバム対応）</summary>
+        <p>認証済みアーティスト、または確認済み公式レーベルの候補だけを表示します。確認できない曲は未取得にし、非公式投稿で代用しません。</p>
         <label><input type="checkbox" id="spotify-prefer-mv" checked style="width:auto"> 公式MVを優先（確認できた公式MVは時間差を最大60秒まで許容）</label>
         <label><input type="checkbox" id="spotify-no-covers" checked style="width:auto"> 歌ってみた・カバー・カラオケなどを除外</label>
         <label for="spotify-tolerance">Spotifyとの再生時間差</label>
@@ -995,7 +996,7 @@
                 const data = await response.json();
                 if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '取得エラー');
                 const best = data.entries[0];
-                if (!best) throw new Error('条件に合う候補なし');
+                if (!best || best.official_source !== true) throw new Error('条件に合う公式候補を確認できません');
                 found.push({...best, position:track.position, title:`${track.title} → ${best.title}`});
               } catch(error) { missing.push(`${track.position}. ${track.title}（${error.message}）`); }
               if (found.length) {
@@ -1004,7 +1005,7 @@
                 [...resultList.children].forEach((card,index) => {
                   const entry = found[index];
                   const note = document.createElement('p');
-                  note.textContent = `${entry.official_mv ? '公式MV候補 ／ ' : ''}${entry.channel} ／ 時間差 ${entry.difference}秒`;
+                  note.textContent = `${entry.official_mv ? '公式MV候補' : '公式アーティスト音源候補'} ／ ${entry.channel} ／ ${entry.album_match ? 'アルバム名一致 ／ ' : ''}時間差 ${entry.difference}秒`;
                   card.prepend(note);
                   card.append(createLinkBlock('YouTube URL', `https://www.youtube.com/watch?v=${entry.id}`, 'YouTube URLをコピー', 'copy-youtube', index));
                 });
@@ -1020,7 +1021,8 @@
           const response = await fetch(`https://video.piloton.cc/spotify/match?${params}`, {cache:'no-store'});
           const data = await response.json();
           if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '曲情報を取得できませんでした。');
-          if (!data.entries.length) throw new Error('条件に合う候補がありません。時間差や除外設定を調整して再検索してください。');
+          data.entries = data.entries.filter(entry => entry.official_source === true);
+          if (!data.entries.length) throw new Error('条件に合う公式候補を確認できません。非公式投稿での代用は行いません。時間差などの設定を確認してください。');
           renderResults({kind:'video', title:`${data.track.artists.join(' / ')} — ${data.track.title}`, entries:data.entries});
           resultKind.textContent = 'SPOTIFY → YOUTUBE';
           const clock = seconds => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2,'0')}`;
@@ -1028,7 +1030,7 @@
           [...resultList.children].forEach((card,index) => {
             const entry = data.entries[index];
             const note = document.createElement('p');
-            note.textContent = `${entry.official_mv ? '公式MV候補 ／ ' : ''}${entry.channel} ／ ${clock(entry.duration)} ／ 時間差 ${entry.difference}秒`;
+            note.textContent = `${entry.official_mv ? '公式MV候補' : '公式アーティスト音源候補'} ／ ${entry.channel} ／ ${clock(entry.duration)} ／ 時間差 ${entry.difference}秒`;
             card.prepend(note);
             card.append(createLinkBlock('YouTube URL', `https://www.youtube.com/watch?v=${entry.id}`, 'YouTube URLをコピー', 'copy-youtube', index));
           });
