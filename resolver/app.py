@@ -4335,6 +4335,40 @@ async def resolve_video(
     return _resolved_response(request, direct_url)
 
 
+@app.get("/spotify/album")
+async def spotify_album(request: Request, url: str = Query(min_length=1, max_length=2048)):
+    _check_rate_limit(_request_client_key(request))
+    parsed = urlsplit(url)
+    match = re.fullmatch(r"/(?:intl-[a-z]+/)?album/([A-Za-z0-9]{22})/?", parsed.path)
+    if parsed.scheme != 'https' or parsed.netloc != 'open.spotify.com' or not match:
+        raise HTTPException(400, 'SpotifyのアルバムURLを入力してください。')
+    def read_album():
+        req = UrlRequest('https://open.spotify.com/embed/album/' + match[1], headers={'User-Agent':'Mozilla/5.0'})
+        with urlopen(req, timeout=20) as response:
+            body = response.read(2_000_001)
+        if len(body) > 2_000_000:
+            raise ValueError('Album metadata too large')
+        data = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', body.decode(), re.S)
+        if not data:
+            raise ValueError('Album metadata missing')
+        entity = json.loads(data[1])['props']['pageProps']['state']['data']['entity']
+        tracks = []
+        for item in entity.get('trackList', []):
+            track_id = str(item.get('uri', '')).removeprefix('spotify:track:')
+            if re.fullmatch(r'[A-Za-z0-9]{22}', track_id):
+                tracks.append({'url':'https://open.spotify.com/track/' + track_id,
+                               'title':item.get('title') or track_id, 'position':len(tracks) + 1})
+        if not tracks:
+            raise ValueError('Album has no tracks')
+        return {'title':entity.get('name') or entity.get('title'), 'tracks':tracks}
+    try:
+        async with _metadata_slots:
+            result = await asyncio.to_thread(read_album)
+        return JSONResponse(result, headers={'Cache-Control':'no-store'})
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        raise HTTPException(502, 'アルバムの収録曲を取得できませんでした。') from error
+
+
 def _music_text(value: str) -> str:
     return re.sub(r"[^\w]", "", unicodedata.normalize("NFKC", value).casefold())
 

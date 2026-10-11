@@ -549,7 +549,7 @@
         <button class="ghost" id="clear-button" type="button" disabled>クリア</button>
       </div>
       <details class="quality-setting">
-        <summary>Spotify → YouTube の検索設定（曲単体リンク対応）</summary>
+        <summary>Spotify → YouTube の検索設定（曲・アルバム対応）</summary>
         <label><input type="checkbox" id="spotify-prefer-mv" checked style="width:auto"> 公式MVを優先（確認できた公式MVは時間差を最大60秒まで許容）</label>
         <label><input type="checkbox" id="spotify-no-covers" checked style="width:auto"> 歌ってみた・カバー・カラオケなどを除外</label>
         <label for="spotify-tolerance">Spotifyとの再生時間差</label>
@@ -617,7 +617,7 @@
           <h3>動画・プレイリスト</h3>
           <ul class="support-list">
             <li>YouTube</li>
-            <li>Spotify（曲単体 → YouTube候補検索）</li>
+            <li>Spotify（曲・アルバム → YouTube候補検索）</li>
             <li>ニコニコ動画</li>
             <li>Instagram（公開投稿）</li>
             <li>Dailymotion</li>
@@ -975,6 +975,47 @@
         inputMessage.className = 'message';
         try {
           const params = new URLSearchParams({url: value, prefer_mv: String(document.getElementById('spotify-prefer-mv').checked), exclude_covers: String(document.getElementById('spotify-no-covers').checked), tolerance: document.getElementById('spotify-tolerance').value});
+          if (/\/(?:intl-[a-z]+\/)?album\//.test(new URL(value).pathname)) {
+            const albumResponse = await fetch(`https://video.piloton.cc/spotify/album?url=${encodeURIComponent(value)}`, {cache:'no-store'});
+            const album = await albumResponse.json();
+            if (!albumResponse.ok) throw new Error(album.detail || 'アルバムを取得できませんでした。');
+            const found = [], missing = [];
+            for (const track of album.tracks) {
+              inputMessage.textContent = `${track.position}/${album.tracks.length}曲を照合中：${track.title}`;
+              params.set('url', track.url);
+              try {
+                let response;
+                for (let retry = 0; retry < 7; retry++) {
+                  response = await fetch(`https://video.piloton.cc/spotify/match?${params}`, {cache:'no-store'});
+                  if (response.status !== 429 || retry === 6) break;
+                  inputMessage.textContent = '検索回数制限のため少し待って自動再開します…';
+                  await new Promise(resolve => setTimeout(resolve, 10000));
+                }
+                const data = await response.json();
+                if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '取得エラー');
+                const best = data.entries[0];
+                if (!best) throw new Error('条件に合う候補なし');
+                found.push({...best, position:track.position, title:`${track.title} → ${best.title}`});
+              } catch(error) { missing.push(`${track.position}. ${track.title}（${error.message}）`); }
+              if (found.length) {
+                renderResults({kind:'playlist', title:album.title, entries:found});
+                resultKind.textContent = 'SPOTIFY ALBUM → YOUTUBE';
+                [...resultList.children].forEach((card,index) => {
+                  const entry = found[index];
+                  const note = document.createElement('p');
+                  note.textContent = `${entry.official_mv ? '公式MV候補 ／ ' : ''}${entry.channel} ／ 時間差 ${entry.difference}秒`;
+                  card.prepend(note);
+                  card.append(createLinkBlock('YouTube URL', `https://www.youtube.com/watch?v=${entry.id}`, 'YouTube URLをコピー', 'copy-youtube', index));
+                });
+              }
+              results.hidden = false;
+              resultTitle.textContent = album.title;
+              resultMessage.textContent = `${track.position}/${album.tracks.length}曲処理済み・${found.length}曲取得。${missing.length ? ' 未取得：' + missing.join(' ／ ') : ''}`;
+            }
+            inputMessage.textContent = `アルバムの照合完了：${found.length}/${album.tracks.length}曲。各曲の最上位候補です。再生して確認してください。`;
+            inputMessage.className = 'message success';
+            return;
+          }
           const response = await fetch(`https://video.piloton.cc/spotify/match?${params}`, {cache:'no-store'});
           const data = await response.json();
           if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '曲情報を取得できませんでした。');
