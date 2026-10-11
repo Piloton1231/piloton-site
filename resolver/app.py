@@ -4412,7 +4412,7 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
             continue
         if exclude_covers and excluded.search(title) and not excluded.search(track["title"]):
             continue
-        alternate = r'\blive\b|\bunplugged\b|\bacoustic\b|\bremix\b|ライブ|ライヴ|弾き語り|ダイジェスト|digest|teaser|trailer|reaction'
+        alternate = r'\blive\b|\bunplugged\b|\bacoustic\b|\bremix\b|ライブ|ライヴ|弾き語り|生音源|生演奏|生歌|ライブ音源|concert|fancam|ダイジェスト|digest|teaser|trailer|reaction'
         if re.search(alternate, title, re.I) and not re.search(alternate, track['title'], re.I):
             continue
         delta = abs(duration - track["duration"])
@@ -4425,8 +4425,15 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
         bare_title = name
         for artist in track['artists']:
             bare_title = bare_title.replace(_music_text(artist), '')
-        official_mv = bool(artist_channel and entry.get('channel_is_verified') and (
-            bare_title == song or re.search(
+        # A translated title in brackets is common in official Japanese MVs.
+        title_without_brackets = re.sub(r'[（(\[].*?[）)\]]', '', title)
+        stripped_title = _music_text(title_without_brackets)
+        for artist in track['artists']:
+            stripped_title = stripped_title.replace(_music_text(artist), '')
+        official_artist = bool(artist_channel and entry.get('channel_is_verified'))
+        audio_version = bool(re.search(r'\baudio\b|\blyrics?\b|音源|歌詞|remaster|visualizer', title, re.I))
+        official_mv = bool(official_artist and not audio_version and (
+            bare_title == song or stripped_title == song or re.search(
             r'official\s+(?:music\s+)?video|公式.*(?:MV|ミュージックビデオ)', title, re.I)))
         allowed_delta = max(tolerance, 60) if prefer_mv and official_mv else tolerance
         if delta > allowed_delta:
@@ -4438,9 +4445,11 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
         score = title_score * 60 + 25 + 15 * (1 - delta / max(allowed_delta, 1))
         if prefer_mv and official_mv:
             score += 100
-        candidates.append({"id": entry["id"], "title": title, "duration": duration,
+        # Source authority precedes tiny duration differences, not just a bonus.
+        priority = (2 if official_mv else 1 if official_artist else 0) if prefer_mv else 0
+        candidates.append({"id": entry["id"], "title": title, "duration": duration, "priority": priority,
                            "difference": round(delta, 1), "channel": channel, "score": round(score, 1), "official_mv": official_mv})
-    return sorted(candidates, key=lambda item: item["score"], reverse=True)[:5]
+    return sorted(candidates, key=lambda item: (item['priority'], item["score"]), reverse=True)[:5]
 
 
 def _match_spotify(value: str, exclude_covers: bool, tolerance: int, prefer_mv: bool = True) -> dict:

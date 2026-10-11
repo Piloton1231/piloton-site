@@ -9,6 +9,18 @@ import app
 
 
 class StreamFeatureTests(unittest.TestCase):
+    def test_official_translated_title_beats_closer_live_recording(self):
+        track = {'title':'インフェルノ', 'artists':['Mrs. GREEN APPLE'], 'duration':211.6}
+        entries = [
+            {'id':'fSddqAez-7A', 'title':'Mrs. GREEN APPLE インフェルノ 2025 生音源', 'duration':213, 'channel':'MGA MUSIC STOCK'},
+            {'id':'wfCcs0vLysk', 'title':'Mrs. GREEN APPLE - インフェルノ（Inferno）', 'duration':222,
+             'channel':'Mrs. GREEN APPLE', 'channel_is_verified':True},
+            {'id':'abcdefghijk', 'title':'Mrs. GREEN APPLE インフェルノ 歌詞付き', 'duration':212, 'channel':'Other'},
+        ]
+        result = app._rank_spotify_candidates(track, entries, True, 15)
+        self.assertEqual(result[0]['id'], 'wfCcs0vLysk')
+        self.assertNotIn('fSddqAez-7A', [e['id'] for e in result])
+
     def test_spotify_matching_excludes_covers_and_wrong_durations(self):
         track = {"title": "Test Song", "artists": ["Artist"], "duration": 200}
         entries = [
