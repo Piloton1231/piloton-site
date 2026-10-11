@@ -4412,6 +4412,9 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
             continue
         if exclude_covers and excluded.search(title) and not excluded.search(track["title"]):
             continue
+        alternate = r'\blive\b|\bunplugged\b|\bacoustic\b|\bremix\b|ライブ|ライヴ|弾き語り|ダイジェスト|digest|teaser|trailer|reaction'
+        if re.search(alternate, title, re.I) and not re.search(alternate, track['title'], re.I):
+            continue
         delta = abs(duration - track["duration"])
         song = _music_text(track["title"])
         name = _music_text(title)
@@ -4419,14 +4422,18 @@ def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, t
         artist_channel = any(_music_text(channel) in {
             _music_text(a), _music_text(a + 'official'), _music_text(a + 'vevo')
         } for a in track['artists'])
-        official_mv = bool(artist_channel and entry.get('channel_is_verified') and re.search(
-            r'official\s+(?:music\s+)?video|公式.*(?:MV|ミュージックビデオ)', title, re.I))
+        bare_title = name
+        for artist in track['artists']:
+            bare_title = bare_title.replace(_music_text(artist), '')
+        official_mv = bool(artist_channel and entry.get('channel_is_verified') and (
+            bare_title == song or re.search(
+            r'official\s+(?:music\s+)?video|公式.*(?:MV|ミュージックビデオ)', title, re.I)))
         allowed_delta = max(tolerance, 60) if prefer_mv and official_mv else tolerance
         if delta > allowed_delta:
             continue
         title_score = 1.0 if song in name else SequenceMatcher(None, song, name).ratio()
         artist_match = any(_music_text(a) in _music_text(title + channel) for a in track["artists"])
-        if title_score < 0.45 or not artist_match:
+        if song not in name or not artist_match:
             continue
         score = title_score * 60 + 25 + 15 * (1 - delta / max(allowed_delta, 1))
         if prefer_mv and official_mv:
