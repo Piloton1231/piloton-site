@@ -15,6 +15,8 @@ import tempfile
 import threading
 import time
 import zlib
+import unicodedata
+from difflib import SequenceMatcher
 from collections import OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -4331,6 +4333,91 @@ async def resolve_video(
 
     _cache[video_url] = (now + CACHE_SECONDS, direct_url)
     return _resolved_response(request, direct_url)
+
+
+def _music_text(value: str) -> str:
+    return re.sub(r"[^\w]", "", unicodedata.normalize("NFKC", value).casefold())
+
+
+def _spotify_track(value: str) -> dict:
+    parsed = urlsplit(value)
+    match = re.fullmatch(r"/(?:intl-[a-z]+/)?track/([A-Za-z0-9]{22})/?", parsed.path)
+    if parsed.scheme != "https" or parsed.netloc != "open.spotify.com" or not match:
+        raise HTTPException(400, "Spotifyの曲単体URL（open.spotify.com/track/...）を入力してください。")
+    track_id = match[1]
+    cached = _get_cached_metadata("spotify:" + track_id)
+    if cached:
+        return cached
+    req = UrlRequest("https://open.spotify.com/embed/track/" + track_id,
+                     headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(req, timeout=20) as response:
+        body = response.read(2_000_001)
+    if len(body) > 2_000_000:
+        raise ValueError("Spotify metadata too large")
+    match = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', body.decode(), re.S)
+    if not match:
+        raise ValueError("Spotify metadata unavailable")
+    entity = json.loads(match[1])["props"]["pageProps"]["state"]["data"]["entity"]
+    title = entity.get("name") or entity.get("title")
+    artists = [a["name"] for a in entity.get("artists", []) if isinstance(a.get("name"), str)]
+    duration = entity.get("duration")
+    if not isinstance(title, str) or not artists or not isinstance(duration, (int, float)) or duration <= 0:
+        raise ValueError("Spotify track metadata incomplete")
+    return _cache_metadata("spotify:" + track_id, {"title": title, "artists": artists, "duration": duration / 1000})
+
+
+def _rank_spotify_candidates(track: dict, entries: list, exclude_covers: bool, tolerance: int) -> list:
+    candidates = []
+    excluded = re.compile(r"歌ってみた|カバー|弾いてみた|カラオケ|\b(?:cover|karaoke|instrumental|nightcore|sped\s*up|slowed)\b", re.I)
+    for entry in entries:
+        if not isinstance(entry, dict) or not YOUTUBE_VIDEO_ID_PATTERN.fullmatch(str(entry.get("id", ""))):
+            continue
+        title = entry.get("title") or ""
+        duration = entry.get("duration")
+        if not isinstance(duration, (int, float)) or entry.get("is_live"):
+            continue
+        if exclude_covers and excluded.search(title) and not excluded.search(track["title"]):
+            continue
+        delta = abs(duration - track["duration"])
+        if delta > tolerance:
+            continue
+        song = _music_text(track["title"])
+        name = _music_text(title)
+        channel = str(entry.get("channel") or entry.get("uploader") or "")
+        title_score = 1.0 if song in name else SequenceMatcher(None, song, name).ratio()
+        artist_match = any(_music_text(a) in _music_text(title + channel) for a in track["artists"])
+        if title_score < 0.45 or not artist_match:
+            continue
+        score = title_score * 60 + 25 + 15 * (1 - delta / max(tolerance, 1))
+        candidates.append({"id": entry["id"], "title": title, "duration": duration,
+                           "difference": round(delta, 1), "channel": channel, "score": round(score, 1)})
+    return sorted(candidates, key=lambda item: item["score"], reverse=True)[:5]
+
+
+def _match_spotify(value: str, exclude_covers: bool, tolerance: int) -> dict:
+    track = _spotify_track(value)
+    options = {"extract_flat": True, "skip_download": True, "quiet": True,
+               "no_warnings": True, "socket_timeout": 15, "retries": 1, "extractor_retries": 1}
+    if YOUTUBE_PROXY_URL:
+        options["proxy"] = YOUTUBE_PROXY_URL
+    with YoutubeDL(options) as downloader:
+        info = downloader.extract_info("ytsearch12:" + " ".join(track["artists"]) + " " + track["title"], download=False)
+    entries = _rank_spotify_candidates(track, info.get("entries") or [], exclude_covers, tolerance)
+    return {"track": track, "entries": entries}
+
+
+@app.get("/spotify/match")
+async def spotify_match(request: Request, url: str = Query(min_length=1, max_length=2048),
+                        exclude_covers: bool = True, tolerance: int = Query(default=15, ge=0, le=120)):
+    _check_rate_limit(_request_client_key(request))
+    try:
+        async with _metadata_slots:
+            result = await asyncio.to_thread(_match_spotify, url, exclude_covers, tolerance)
+    except HTTPException:
+        raise
+    except (ValueError, KeyError, TypeError, OSError, DownloadError) as error:
+        raise HTTPException(502, "Spotifyの曲情報またはYouTube候補を取得できませんでした。") from error
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/youtube/info")

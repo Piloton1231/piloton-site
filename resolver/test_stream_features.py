@@ -9,6 +9,24 @@ import app
 
 
 class StreamFeatureTests(unittest.TestCase):
+    def test_spotify_matching_excludes_covers_and_wrong_durations(self):
+        track = {"title": "Test Song", "artists": ["Artist"], "duration": 200}
+        entries = [
+            {"id": "abcdefghijk", "title": "Artist Test Song Cover", "duration": 200},
+            {"id": "abcdefghijl", "title": "Artist Test Song", "duration": 201},
+            {"id": "abcdefghijm", "title": "Artist Test Song", "duration": 290},
+            {"id": "abcdefghijn", "title": "Someone Else Test Song", "duration": 200},
+        ]
+        result = app._rank_spotify_candidates(track, entries, True, 15)
+        self.assertEqual([entry["id"] for entry in result], ["abcdefghijl"])
+        self.assertEqual(len(app._rank_spotify_candidates(track, entries, False, 15)), 2)
+
+    def test_spotify_rejects_non_track_or_external_urls(self):
+        for url in ("https://example.com/track/0Lr4kGOYn9l83EjuK6cZFQ",
+                    "https://open.spotify.com/playlist/0Lr4kGOYn9l83EjuK6cZFQ"):
+            with self.assertRaises(app.HTTPException):
+                app._spotify_track(url)
+
     def test_vrchat_head_routes_are_registered(self):
         for path in ("/stream", "/stream/pornhub/media.mp4", "/stream/rutube/mux.mp4"):
             self.assertTrue(

@@ -537,17 +537,24 @@
     <section class="hero">
       <span class="kicker">VRChat Video / Stream Helper</span>
       <h1><span class="gradient-title">VRChat URL</span><br>コンバーター</h1>
-      <p class="lead">YouTubeの動画・プレイリストと、ニコニコ動画などの配信URLを自動判定し、VRChat用リンクへ変換します。</p>
+      <p class="lead">YouTube・Spotifyの曲・各配信サイトのURLから、VRChat用リンクを作成します。Spotifyは曲名・アーティスト・時間でYouTube候補を検索します。</p>
     </section>
 
     <section class="tool-card" aria-label="URL変換ツール">
       <span class="step-label">Step 01</span>
       <label for="youtube-url">動画・プレイリスト・配信URL</label>
       <div class="input-row">
-        <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="YouTube / Instagram / ニコニコ動画 / X / TikTok など">
+        <input id="youtube-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="YouTube / Spotifyの曲 / ニコニコ動画 / X など">
         <button id="create-button" type="button">変換</button>
         <button class="ghost" id="clear-button" type="button" disabled>クリア</button>
       </div>
+      <details class="quality-setting">
+        <summary>Spotify → YouTube の検索設定（曲単体リンク対応）</summary>
+        <label><input type="checkbox" id="spotify-no-covers" checked style="width:auto"> 歌ってみた・カバー・カラオケなどを除外</label>
+        <label for="spotify-tolerance">Spotifyとの再生時間差</label>
+        <select id="spotify-tolerance"><option value="5">±5秒</option><option value="15" selected>±15秒</option><option value="30">±30秒</option><option value="60">±60秒（MV向け）</option></select>
+        <p>曲名・アーティスト・時間で候補を照合します。自動判定のため別バージョンが混ざる場合があります。Spotify音源の転送ではありません。</p>
+      </details>
       <div class="quality-setting" id="quality-setting" hidden>
         <label for="stream-quality">画質の上限</label>
         <select id="stream-quality">
@@ -609,6 +616,7 @@
           <h3>動画・プレイリスト</h3>
           <ul class="support-list">
             <li>YouTube</li>
+            <li>Spotify（曲単体 → YouTube候補検索）</li>
             <li>ニコニコ動画</li>
             <li>Instagram（公開投稿）</li>
             <li>Dailymotion</li>
@@ -957,6 +965,38 @@
 
     const createListing = async () => {
       const value = youtubeInput.value.trim();
+      let spotify = false;
+      try { spotify = new URL(value).hostname === 'open.spotify.com'; } catch {}
+      if (spotify) {
+        clearResults();
+        setBusy(true);
+        inputMessage.textContent = 'Spotifyの曲情報とYouTube候補を照合しています…';
+        inputMessage.className = 'message';
+        try {
+          const params = new URLSearchParams({url: value, exclude_covers: String(document.getElementById('spotify-no-covers').checked), tolerance: document.getElementById('spotify-tolerance').value});
+          const response = await fetch(`https://video.piloton.cc/spotify/match?${params}`, {cache:'no-store'});
+          const data = await response.json();
+          if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '曲情報を取得できませんでした。');
+          if (!data.entries.length) throw new Error('条件に合う候補がありません。時間差や除外設定を調整して再検索してください。');
+          renderResults({kind:'video', title:`${data.track.artists.join(' / ')} — ${data.track.title}`, entries:data.entries});
+          resultKind.textContent = 'SPOTIFY → YOUTUBE';
+          const clock = seconds => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2,'0')}`;
+          resultMessage.textContent = `Spotify ${clock(data.track.duration)} ／ 一致度順の候補です。先頭が推奨候補ですが、再生して曲を確認してください。`;
+          [...resultList.children].forEach((card,index) => {
+            const entry = data.entries[index];
+            const note = document.createElement('p');
+            note.textContent = `${entry.channel} ／ ${clock(entry.duration)} ／ 時間差 ${entry.difference}秒`;
+            card.prepend(note);
+            card.append(createLinkBlock('YouTube URL', `https://www.youtube.com/watch?v=${entry.id}`, 'YouTube URLをコピー', 'copy-youtube', index));
+          });
+          inputMessage.textContent = 'YouTube候補とVRChat用リンクを取得しました。';
+          inputMessage.className = 'message success';
+        } catch(error) {
+          inputMessage.textContent = error.message || 'Spotifyの照合に失敗しました。';
+          inputMessage.className = 'message error';
+        } finally { setBusy(false); }
+        return;
+      }
       const parsed = parseYouTubeUrl(value);
       clearResults();
       if (!parsed) {
@@ -1024,6 +1064,10 @@
       const entry = resultEntries[index];
       const message = document.getElementById(`card-message-${index}`);
       if (!entry || !message) return;
+      if (button.dataset.action === 'copy-youtube') {
+        await copyText(`https://www.youtube.com/watch?v=${entry.id}`, message, 'YouTube URLをコピーしました。');
+        return;
+      }
       const isBackup = button.dataset.action === 'copy-ksync';
       await copyText(
         isBackup ? entry.ksyncUrl : entry.mainUrl,
