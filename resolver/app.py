@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import html
+from html.parser import HTMLParser
 import hashlib
 import http.cookiejar
 from http.client import IncompleteRead
@@ -127,10 +128,10 @@ NICONICO_FRONTEND_HEADERS = {
     "X-Frontend-ID": "6",
     "X-Frontend-Version": "0",
 }
-INSTAGRAM_SOURCE_HOST_ROOTS = ("instagram.com", "kkinstagram.com")
+INSTAGRAM_SOURCE_HOST_ROOTS = ("instagram.com", "kkinstagram.com", "oginstagram.com")
 INSTAGRAM_MEDIA_HOST_ROOTS = ("cdninstagram.com", "fbcdn.net")
 INSTAGRAM_PATH_PATTERN = re.compile(r"(?:p|reel|reels|tv)/([A-Za-z0-9_-]{5,64})", re.IGNORECASE)
-INSTAGRAM_EMBED_BASE_URL = "https://kkinstagram.com"
+INSTAGRAM_EMBED_BASE_URL = "https://www.oginstagram.com"
 INSTAGRAM_EMBED_HEADERS = {
     "User-Agent": "Discordbot/2.0",
     "Accept": "text/html,video/*,image/*;q=0.9,*/*;q=0.8",
@@ -654,11 +655,34 @@ def _instagram_embed_url(value: str) -> str:
     return f"{INSTAGRAM_EMBED_BASE_URL}/{kind}/{quote(shortcode, safe='')}/"
 
 
+class _InstagramMetadataParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.media = {}
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag.lower() == "meta":
+            key = attrs.get("property", "")
+            if key in {"og:video", "og:video:secure_url", "og:image"}:
+                self.media[key] = attrs.get("content", "")
+
+
+def _validate_instagram_target(value: str) -> str:
+    parsed = urlsplit(value)
+    if (parsed.scheme == "https" and parsed.hostname == "www.oginstagram.com"
+            and parsed.port in (None, 443) and not parsed.username and not parsed.password
+            and re.fullmatch(r"/offload/[A-Za-z0-9_-]{5,64}/\d+", parsed.path)):
+        return value
+    return _validate_instagram_media_url(value)
+
+
 def _resolve_instagram_media(value: str) -> str:
     opener = build_opener(_NoRedirectHandler())
     current_url = _instagram_embed_url(value)
+    metadata_read = False
 
-    for _ in range(5):
+    for _ in range(7):
         request = UrlRequest(
             current_url,
             headers=INSTAGRAM_EMBED_HEADERS,
@@ -674,15 +698,25 @@ def _resolve_instagram_media(value: str) -> str:
             if not location:
                 raise ValueError("Instagram embed redirect is missing")
             next_url = urljoin(current_url, location)
-            next_host = (urlsplit(next_url).hostname or "").lower().rstrip(".")
-            if not any(_host_matches(next_host, root) for root in INSTAGRAM_MEDIA_HOST_ROOTS):
-                raise ValueError("Unexpected Instagram embed redirect")
-            current_url = _validate_instagram_media_url(next_url)
+            current_url = _validate_instagram_target(next_url)
             continue
 
         with response:
             final_url = response.geturl()
             content_type = response.headers.get_content_type().lower()
+            if not metadata_read and current_url == _instagram_embed_url(value) and content_type == "text/html":
+                body = response.read(2_000_001)
+                if len(body) > 2_000_000:
+                    raise ValueError("Instagram metadata is too large")
+                parser = _InstagramMetadataParser()
+                parser.feed(body.decode("utf-8", errors="replace"))
+                media = (parser.media.get("og:video:secure_url")
+                         or parser.media.get("og:video") or parser.media.get("og:image"))
+                if not media:
+                    raise StreamCompatibilityError("The public Instagram post did not provide media")
+                current_url = _validate_instagram_target(urljoin(current_url, media))
+                metadata_read = True
+                continue
         final_url = _validate_instagram_media_url(final_url)
         if not content_type.startswith(("video/", "image/")):
             raise StreamCompatibilityError("The public Instagram post did not provide media")
@@ -3608,7 +3642,7 @@ async def resolve_stream(
                 return RedirectResponse(
                     media_url,
                     status_code=307,
-                    headers=_stream_resolver_headers("instagram-kkinstagram"),
+                    headers=_stream_resolver_headers("instagram-oginstagram"),
                 )
             if route == "rule34xxx":
                 media_url = await asyncio.to_thread(_resolve_rule34xxx_media, url)

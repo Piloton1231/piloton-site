@@ -9,6 +9,45 @@ import app
 
 
 class StreamFeatureTests(unittest.TestCase):
+    def test_instagram_uses_og_for_all_input_hosts(self):
+        for host in ("www.instagram.com", "www.oginstagram.com", "kkinstagram.com"):
+            self.assertEqual(app._instagram_embed_url(
+                f"https://{host}/reels/Derflurx348/?tracking=1"),
+                "https://www.oginstagram.com/reels/Derflurx348/")
+
+    def test_instagram_metadata_and_redirect(self):
+        from email.message import Message
+        class Response:
+            def __init__(self, url, content_type, body=b""):
+                self.url, self.body = url, body
+                self.headers = Message()
+                self.headers["Content-Type"] = content_type
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def geturl(self): return self.url
+            def read(self, limit): return self.body[:limit]
+        page = "https://www.oginstagram.com/reels/Derflurx348/"
+        offload = "https://www.oginstagram.com/offload/Derflurx348/1?a=1&b=2"
+        cdn = "https://scontent.cdninstagram.com/video.mp4"
+        redirect = HTTPError(offload, 302, "redirect", {"Location": cdn}, None)
+        from unittest.mock import MagicMock
+        opener = MagicMock()
+        opener.open.side_effect = [
+            Response(page, "text/html", b'<meta content="https://www.oginstagram.com/offload/Derflurx348/1?a=1&amp;b=2" property="og:video">'),
+            redirect, Response(cdn, "video/mp4"),
+        ]
+        with patch.object(app, "build_opener", return_value=opener):
+            self.assertEqual(app._resolve_instagram_media(
+                "https://www.instagram.com/reels/Derflurx348/"), cdn)
+        self.assertEqual(opener.open.call_args_list[1].args[0].full_url, offload)
+
+    def test_instagram_rejects_untrusted_targets(self):
+        for url in ("http://127.0.0.1/private", "https://evil.example/video.mp4",
+                    "https://www.oginstagram.com/arbitrary",
+                    "https://www.oginstagram.com.evil.example/offload/Derflurx348/1"):
+            with self.assertRaises(ValueError):
+                app._validate_instagram_target(url)
+
     def test_label_requires_verified_channel_id_and_artist_credit(self):
         track = {'title':'How-to','artists':['Mrs. GREEN APPLE'],'duration':237}
         entry = {'id':'e1ljAkVuQCA','title':'Mrs. GREEN APPLE - How-to','duration':237,

@@ -665,7 +665,7 @@
     </section>
 
     <aside class="notice">
-      YouTubeのメインリンクはPiloton管理の変換機能を使い、Ksyncは手動で選べる予備リンクとして表示します。予備リンクでは外部サービス（r.0cm.org / ksync.arcanescripts.com）へYouTube URLとアクセス情報が送信されます。Instagramの公開投稿は外部サービス（kkinstagram.com）を経由して動画・画像URLを取得します。プレイリストは最大200件です。YouTube以外の変換リンクは、VRChatのLive / Streamモードで使用してください。非公開・ログイン必須・有料コンテンツには対応しません。動画の権利と各サービスの利用規約を守って使用してください。
+      YouTubeのメインリンクはPiloton管理の変換機能を使い、Ksyncは手動で選べる予備リンクとして表示します。予備リンクでは外部サービス（r.0cm.org / ksync.arcanescripts.com）へYouTube URLとアクセス情報が送信されます。Instagramの公開投稿は外部サービス（oginstagram.com）を経由して動画・画像URLを取得します。プレイリストは最大200件です。YouTube以外の変換リンクは、VRChatのLive / Streamモードで使用してください。非公開・ログイン必須・有料コンテンツには対応しません。動画の権利と各サービスの利用規約を守って使用してください。
     </aside>
   </main>
 
@@ -753,7 +753,7 @@
     const identifyStreamService = (host) => {
       const services = [
         [['nicovideo.jp'], 'ニコニコ動画'],
-        [['instagram.com', 'kkinstagram.com'], 'Instagram（公開投稿）'],
+        [['instagram.com', 'kkinstagram.com', 'oginstagram.com'], 'Instagram（公開投稿）'],
         [['dailymotion.com'], 'Dailymotion'],
         [['rutube.ru'], 'Rutube'],
         [['bilibili.com'], 'Bilibili'],
