@@ -40,6 +40,7 @@ from curl_cffi.curl import CURL_WRITEFUNC_ERROR
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from imageio_ffmpeg import get_ffmpeg_exe
 from yt_dlp import YoutubeDL
 from yt_dlp.extractor.abematv import AbemaLicenseRH, AbemaTVBaseIE
@@ -4180,6 +4181,21 @@ async def private_niconico_playback(ticket: str):
     except BaseException:
         _private_nico_slots.release()
         raise
+    cleanup_lock = threading.Lock()
+    cleaned = False
+    def cleanup():
+        nonlocal cleaned
+        with cleanup_lock:
+            if cleaned:
+                return
+            cleaned = True
+            try:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+                process.stdout.close()
+            finally:
+                _private_nico_slots.release()
     def chunks():
         try:
             # Bound stalled upstream reads; a disconnected player must not leave
@@ -4194,12 +4210,8 @@ async def private_niconico_playback(ticket: str):
                     break
                 yield chunk
         finally:
-            if process.poll() is None:
-                process.kill()
-            process.wait()
-            process.stdout.close()
-            _private_nico_slots.release()
-    return StreamingResponse(chunks(), media_type='video/mp4', headers={
+            cleanup()
+    return StreamingResponse(chunks(), media_type='video/mp4', background=BackgroundTask(cleanup), headers={
         'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer',
         'X-Content-Type-Options': 'nosniff',
     })
