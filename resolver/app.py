@@ -10,7 +10,6 @@ import itertools
 import json
 import os
 import re
-import select
 import subprocess
 import sys
 import tempfile
@@ -39,8 +38,7 @@ from curl_cffi import requests as curl_requests
 from curl_cffi.curl import CURL_WRITEFUNC_ERROR
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
-from starlette.background import BackgroundTask
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from imageio_ffmpeg import get_ffmpeg_exe
 from yt_dlp import YoutubeDL
 from yt_dlp.extractor.abematv import AbemaLicenseRH, AbemaTVBaseIE
@@ -4145,9 +4143,6 @@ async def _proxy_niconico_media_response(
     return Response(content=body, status_code=status_code, headers=response_headers)
 
 
-_private_nico_slots = threading.BoundedSemaphore(2)
-
-
 def _read_private_nico_ticket(ticket: str):
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket):
         raise HTTPException(status_code=404, detail="Unknown private playback link")
@@ -4169,61 +4164,13 @@ def _read_private_nico_ticket(ticket: str):
     return master, cookie
 
 
-@app.head('/private/niconico/{ticket}.mp4')
-async def private_niconico_head(ticket: str):
-    _read_private_nico_ticket(ticket)
-    response = Response(media_type='video/mp4', headers={
-        'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer',
-        'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'none',
-    })
-    # The stream length is unknown, not zero. HEAD must not start ffmpeg.
-    del response.headers['content-length']
-    return response
-
-
-@app.get('/private/niconico/{ticket}.mp4')
+@app.api_route('/private/niconico/{ticket}.mp4', methods=['GET', 'HEAD'])
 async def private_niconico_playback(ticket: str):
-    master, cookie = _read_private_nico_ticket(ticket)
-    if not JAPAN_PROXY_URL:
-        raise HTTPException(status_code=503, detail="Private playback unavailable")
-    if not _private_nico_slots.acquire(blocking=False):
-        raise HTTPException(status_code=429, detail="Private playback is busy")
-    try:
-        process = await asyncio.to_thread(_start_niconico_mux_process, master, cookie, JAPAN_PROXY_URL)
-    except BaseException:
-        _private_nico_slots.release()
-        raise
-    cleanup_lock = threading.Lock()
-    cleaned = False
-    def cleanup():
-        nonlocal cleaned
-        with cleanup_lock:
-            if cleaned:
-                return
-            cleaned = True
-            try:
-                if process.poll() is None:
-                    process.kill()
-                process.wait()
-                process.stdout.close()
-            finally:
-                _private_nico_slots.release()
-    def chunks():
-        try:
-            # Bound stalled upstream reads; a disconnected player must not leave
-            # a permanent ffmpeg process or occupy a playback slot indefinitely.
-            deadline = time.monotonic() + 3600
-            while time.monotonic() < deadline:
-                ready, _, _ = select.select([process.stdout], [], [], 30)
-                if not ready:
-                    break
-                chunk = os.read(process.stdout.fileno(), 64 * 1024)
-                if not chunk:
-                    break
-                yield chunk
-        finally:
-            cleanup()
-    return StreamingResponse(chunks(), media_type='video/mp4', background=BackgroundTask(cleanup), headers={
+    _read_private_nico_ticket(ticket)
+    cached = Path('/run/private-niconico') / (ticket + '.mp4')
+    if not cached.is_file():
+        raise HTTPException(status_code=410, detail="Please issue a new prepared playback link")
+    return FileResponse(cached, media_type='video/mp4', headers={
         'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer',
         'X-Content-Type-Options': 'nosniff',
     })

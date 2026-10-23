@@ -11,13 +11,14 @@ import app
 class StreamFeatureTests(unittest.TestCase):
     def test_private_head_checks_ticket_without_starting_media(self):
         import asyncio
-        with patch.object(app, '_read_private_nico_ticket', return_value=('url', 'cookie')) as read, patch.object(app, '_start_niconico_mux_process') as start:
-            response = asyncio.run(app.private_niconico_head('a' * 43))
+        with patch.object(app, '_read_private_nico_ticket', return_value=('url', 'cookie')) as read, patch.object(app.Path, 'is_file', return_value=True), patch.object(app, '_start_niconico_mux_process') as start:
+            response = asyncio.run(app.private_niconico_playback('a' * 43))
         read.assert_called_once_with('a' * 43)
         start.assert_not_called()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers['content-type'], 'video/mp4')
         self.assertNotIn('content-length', response.headers)
+        self.assertIsInstance(response, app.FileResponse)
 
     def test_private_nico_proxy_not_embedded_in_ffmpeg_arguments(self):
         proxy = 'http://user:password@proxy.example:8000'
