@@ -18,6 +18,8 @@ services:
       JAPAN_PROXY_URL: ${JAPAN_PROXY_URL:-}
     expose:
       - "8000"
+    volumes:
+      - /opt/piloton-private-niconico:/run/private-niconico:ro
     healthcheck:
       test:
         - CMD

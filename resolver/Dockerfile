@@ -22,7 +22,7 @@ WORKDIR /resolver
 COPY requirements.txt requirements-docker.txt ./
 RUN pip install --no-cache-dir --requirement requirements-docker.txt
 
-COPY app.py ./
+COPY app.py private_niconico.py ./
 USER resolver
 
 EXPOSE 8000

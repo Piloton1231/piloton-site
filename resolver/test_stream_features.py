@@ -9,6 +9,27 @@ import app
 
 
 class StreamFeatureTests(unittest.TestCase):
+    def test_private_nico_proxy_not_embedded_in_ffmpeg_arguments(self):
+        proxy = 'http://user:password@proxy.example:8000'
+        with patch.object(app, '_validate_niconico_upstream_url', side_effect=lambda x: x), patch.object(app.subprocess, 'Popen') as popen:
+            app._start_niconico_mux_process('https://delivery.domand.nicovideo.jp/master.m3u8', 'a' * 24, proxy)
+        self.assertEqual(popen.call_args.kwargs['env']['https_proxy'], proxy)
+        self.assertNotIn(proxy, str(popen.call_args.args))
+
+    def test_private_nico_ticket_validation(self):
+        import time
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as error:
+            app._read_private_nico_ticket('../secret')
+        self.assertEqual(error.exception.status_code, 404)
+        with patch.object(app.Path, 'read_text', return_value=json.dumps({'expires': 0})):
+            with self.assertRaises(HTTPException) as error:
+                app._read_private_nico_ticket('a' * 43)
+            self.assertEqual(error.exception.status_code, 410)
+        self.assertIsNotNone(app.STREAM_COOKIE_PATTERN.fullmatch('a' * 20 + ':123'))
+        self.assertIsNone(app.STREAM_COOKIE_PATTERN.fullmatch('a' * 20 + '\r\nX: bad'))
+        self.assertIsNone(app.STREAM_COOKIE_PATTERN.fullmatch('a' * 20 + ';user_session=bad'))
+
     def test_instagram_uses_og_for_all_input_hosts(self):
         for host in ("www.instagram.com", "www.oginstagram.com", "kkinstagram.com"):
             self.assertEqual(app._instagram_embed_url(

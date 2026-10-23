@@ -10,6 +10,7 @@ import itertools
 import json
 import os
 import re
+import select
 import subprocess
 import sys
 import tempfile
@@ -293,7 +294,7 @@ TVER_MUX_TOKEN_SECONDS = max(
     3600,
     min(14400, int(os.getenv("TVER_MUX_TOKEN_SECONDS", "14400"))),
 )
-STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~-]{16,256}")
+STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~:-]{16,256}")
 
 _cache: dict[str, tuple[float, str]] = {}
 _metadata_cache: dict[str, tuple[float, dict]] = {}
@@ -3077,12 +3078,17 @@ def _read_abema_resource(
     raise URLError("ABEMA stream request failed")
 
 
-def _create_niconico_session(video_id: str) -> tuple[str, str]:
-    cookie_jar = http.cookiejar.CookieJar()
-    opener = build_opener(HTTPCookieProcessor(cookie_jar))
+def _create_niconico_session(video_id: str, cookie_jar=None, proxy_url: str = "") -> tuple[str, str]:
+    authenticated = cookie_jar is not None
+    if cookie_jar is None:
+        cookie_jar = http.cookiejar.CookieJar()
+    handlers = [HTTPCookieProcessor(cookie_jar)]
+    if proxy_url:
+        handlers.append(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+    opener = build_opener(*handlers)
     action_track_id = f"AAAAAAAAAA_{round(time.time() * 1000)}"
     watch_url = (
-        f"https://www.nicovideo.jp/api/watch/v3_guest/{quote(video_id, safe='')}?"
+        f"https://www.nicovideo.jp/api/watch/{'v3' if authenticated else 'v3_guest'}/{quote(video_id, safe='')}?"
         f"{urlencode({'actionTrackId': action_track_id})}"
     )
     watch_request = UrlRequest(watch_url, headers=NICONICO_FRONTEND_HEADERS, method="GET")
@@ -3185,7 +3191,7 @@ def _niconico_mux_url(master_url: str, domand_cookie: str) -> str:
     return f"{NICONICO_MUX_PROXY_BASE_URL}{quote(token, safe='')}"
 
 
-def _start_niconico_mux_process(master_url: str, domand_cookie: str) -> subprocess.Popen:
+def _start_niconico_mux_process(master_url: str, domand_cookie: str, proxy_url: str = "") -> subprocess.Popen:
     master_url = _validate_niconico_upstream_url(master_url)
     if not STREAM_COOKIE_PATTERN.fullmatch(domand_cookie):
         raise ValueError("Invalid NicoNico stream cookie")
@@ -3225,8 +3231,12 @@ def _start_niconico_mux_process(master_url: str, domand_cookie: str) -> subproce
         "mp4",
         "pipe:1",
     ]
+    process_env = os.environ.copy()
+    if proxy_url:
+        process_env.update(http_proxy=proxy_url, https_proxy=proxy_url)
     return subprocess.Popen(
         command,
+        env=process_env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -4132,6 +4142,67 @@ async def _proxy_niconico_media_response(
         status_code = 200
 
     return Response(content=body, status_code=status_code, headers=response_headers)
+
+
+_private_nico_slots = threading.BoundedSemaphore(2)
+
+
+def _read_private_nico_ticket(ticket: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket):
+        raise HTTPException(status_code=404, detail="Unknown private playback link")
+    try:
+        payload = json.loads((Path('/run/private-niconico') / (ticket + '.json')).read_text())
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Unknown private playback link")
+    if not isinstance(payload, dict) or not isinstance(payload.get('expires'), (int, float)):
+        raise HTTPException(status_code=404, detail="Unknown private playback link")
+    if payload['expires'] <= time.time():
+        raise HTTPException(status_code=410, detail="Private playback link expired")
+    try:
+        master = _validate_niconico_upstream_url(payload['master'])
+        cookie = payload['cookie']
+        if not isinstance(cookie, str) or not STREAM_COOKIE_PATTERN.fullmatch(cookie):
+            raise ValueError('Invalid cookie')
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(status_code=502, detail="Invalid private playback session")
+    return master, cookie
+
+
+@app.get('/private/niconico/{ticket}.mp4')
+async def private_niconico_playback(ticket: str):
+    master, cookie = _read_private_nico_ticket(ticket)
+    if not JAPAN_PROXY_URL:
+        raise HTTPException(status_code=503, detail="Private playback unavailable")
+    if not _private_nico_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Private playback is busy")
+    try:
+        process = await asyncio.to_thread(_start_niconico_mux_process, master, cookie, JAPAN_PROXY_URL)
+    except BaseException:
+        _private_nico_slots.release()
+        raise
+    def chunks():
+        try:
+            # Bound stalled upstream reads; a disconnected player must not leave
+            # a permanent ffmpeg process or occupy a playback slot indefinitely.
+            deadline = time.monotonic() + 3600
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([process.stdout], [], [], 30)
+                if not ready:
+                    break
+                chunk = os.read(process.stdout.fileno(), 64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            process.stdout.close()
+            _private_nico_slots.release()
+    return StreamingResponse(chunks(), media_type='video/mp4', headers={
+        'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff',
+    })
 
 
 @app.get("/stream/niconico/mux.mp4")
