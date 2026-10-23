@@ -4169,6 +4169,18 @@ def _read_private_nico_ticket(ticket: str):
     return master, cookie
 
 
+@app.head('/private/niconico/{ticket}.mp4')
+async def private_niconico_head(ticket: str):
+    _read_private_nico_ticket(ticket)
+    response = Response(media_type='video/mp4', headers={
+        'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'none',
+    })
+    # The stream length is unknown, not zero. HEAD must not start ffmpeg.
+    del response.headers['content-length']
+    return response
+
+
 @app.get('/private/niconico/{ticket}.mp4')
 async def private_niconico_playback(ticket: str):
     master, cookie = _read_private_nico_ticket(ticket)
