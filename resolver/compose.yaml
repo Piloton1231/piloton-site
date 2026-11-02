@@ -15,11 +15,13 @@ services:
       PLAYER_CLIENTS: ${PLAYER_CLIENTS:-web_embedded,mweb,android_vr}
       PLAYER_TEST_PREVIEW_SECONDS: ${PLAYER_TEST_PREVIEW_SECONDS:-12}
       YOUTUBE_PROXY_URL: ${YOUTUBE_PROXY_URL:-}
+      YOUTUBE_COOKIE_FILE: /run/youtube-cookies.txt
       JAPAN_PROXY_URL: ${JAPAN_PROXY_URL:-}
     expose:
       - "8000"
     volumes:
       - /opt/piloton-private-niconico:/run/private-niconico:ro
+      - /opt/piloton-youtube-cookies.txt:/run/youtube-cookies.txt:ro
     healthcheck:
       test:
         - CMD
