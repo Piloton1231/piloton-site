@@ -10,6 +10,7 @@ import itertools
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -98,6 +99,7 @@ POT_PROVIDER = os.getenv("POT_PROVIDER", "0").lower() in {"1", "true", "yes"}
 POT_SERVER_URL = os.getenv("POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/")
 FORCE_IPV4 = os.getenv("FORCE_IPV4", "0").lower() in {"1", "true", "yes"}
 YOUTUBE_PROXY_URL = os.getenv("YOUTUBE_PROXY_URL", "").strip()
+YOUTUBE_COOKIE_FILE = os.getenv("YOUTUBE_COOKIE_FILE", "").strip()
 JAPAN_PROXY_URL = os.getenv("JAPAN_PROXY_URL", "").strip()
 CACHE_SECONDS = max(0, int(os.getenv("CACHE_SECONDS", "180")))
 EDGE_CACHE_SECONDS = max(0, int(os.getenv("EDGE_CACHE_SECONDS", str(CACHE_SECONDS))))
@@ -3294,58 +3296,88 @@ def _request_client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _extract_media_url_attempt(
+    video_url: str, player_client: str, *, proxy: str = "", cookiefile: str = ""
+) -> str:
+    youtube_args = {} if player_client == "default" else {"player_client": [player_client]}
+    extractor_args = {"youtube": youtube_args}
+    if POT_PROVIDER and player_client in {"mweb", "web"}:
+        youtube_args["fetch_pot"] = ["always"]
+        extractor_args["youtubepot-bgutilhttp"] = {"base_url": [POT_SERVER_URL]}
+
+    options = {
+        "format": FORMAT_SELECTOR,
+        "noplaylist": True,
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "cachedir": False,
+        "socket_timeout": 20,
+        "retries": 1,
+        "extractor_retries": 1,
+        "extractor_args": extractor_args,
+    }
+    if JS_RUNTIME:
+        runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
+        options["js_runtimes"] = {JS_RUNTIME: runtime_options}
+    if FORCE_IPV4:
+        options["source_address"] = "0.0.0.0"
+    if proxy:
+        options["proxy"] = proxy
+    if cookiefile:
+        options["cookiefile"] = cookiefile
+
+    with YoutubeDL(options) as downloader:
+        info = downloader.extract_info(video_url, download=False)
+
+    direct_url = info.get("url") if isinstance(info, dict) else None
+    if not direct_url and isinstance(info, dict):
+        downloads = info.get("requested_downloads") or []
+        if downloads:
+            direct_url = downloads[0].get("url")
+    if not direct_url:
+        raise ValueError("No compatible media URL was returned")
+
+    media = urlsplit(direct_url)
+    media_host = (media.hostname or "").lower().rstrip(".")
+    if (
+        media.scheme != "https"
+        or media.username is not None
+        or media.password is not None
+        or not any(media_host.endswith(suffix) for suffix in ALLOWED_MEDIA_SUFFIXES)
+    ):
+        raise ValueError("Unexpected media host")
+    return direct_url
+
+
 def _extract_media_url(video_url: str, *, direct: bool = False) -> str:
     last_error = None
-    # Let yt-dlp choose its supported clients if all configured overrides fail.
     clients = tuple(dict.fromkeys((*PLAYER_CLIENTS, "default"))) if direct else PLAYER_CLIENTS
     for player_client in clients:
-        youtube_args = {} if player_client == "default" else {"player_client": [player_client]}
-        extractor_args = {"youtube": youtube_args}
-        if POT_PROVIDER and player_client in {"mweb", "web"}:
-            youtube_args["fetch_pot"] = ["always"]
-            extractor_args["youtubepot-bgutilhttp"] = {"base_url": [POT_SERVER_URL]}
-
-        options = {
-            "format": FORMAT_SELECTOR,
-            "noplaylist": True,
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
-            "cachedir": False,
-            "socket_timeout": 20,
-            "retries": 1,
-            "extractor_retries": 1,
-            "extractor_args": extractor_args,
-        }
-        if JS_RUNTIME:
-            runtime_options = {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}
-            options["js_runtimes"] = {JS_RUNTIME: runtime_options}
-        if FORCE_IPV4:
-            options["source_address"] = "0.0.0.0"
-        if YOUTUBE_PROXY_URL:
-            options["proxy"] = YOUTUBE_PROXY_URL
-
         try:
-            with YoutubeDL(options) as downloader:
-                info = downloader.extract_info(video_url, download=False)
-
-            direct_url = info.get("url") if isinstance(info, dict) else None
-            if not direct_url and isinstance(info, dict):
-                downloads = info.get("requested_downloads") or []
-                if downloads:
-                    direct_url = downloads[0].get("url")
-            if not direct_url:
-                raise ValueError("No compatible media URL was returned")
-
-            media = urlsplit(direct_url)
-            media_host = (media.hostname or "").lower().rstrip(".")
-            if media.scheme != "https" or media.username is not None or media.password is not None or not any(media_host.endswith(suffix) for suffix in ALLOWED_MEDIA_SUFFIXES):
-                raise ValueError("Unexpected media host")
-            return direct_url
+            return _extract_media_url_attempt(video_url, player_client, proxy=YOUTUBE_PROXY_URL)
         except (DownloadError, ValueError, OSError) as error:
             last_error = error
             print(
                 f"YouTube direct strategy failed: {player_client} ({type(error).__name__})",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    # Use the existing MusicBot session only when anonymous extraction fails.
+    # yt-dlp updates cookie files on exit, so never give it the mounted original.
+    if direct and YOUTUBE_COOKIE_FILE and Path(YOUTUBE_COOKIE_FILE).is_file():
+        try:
+            with tempfile.TemporaryDirectory(prefix="youtube-cookies-") as temp_dir:
+                cookie_copy = str(Path(temp_dir) / "cookies.txt")
+                shutil.copyfile(YOUTUBE_COOKIE_FILE, cookie_copy)
+                return _extract_media_url_attempt(
+                    video_url, "default", cookiefile=cookie_copy
+                )
+        except (DownloadError, ValueError, OSError) as error:
+            last_error = error
+            print(
+                f"YouTube authenticated strategy failed: {type(error).__name__}",
                 file=sys.stderr,
                 flush=True,
             )
