@@ -3294,10 +3294,12 @@ def _request_client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _extract_media_url(video_url: str) -> str:
+def _extract_media_url(video_url: str, *, direct: bool = False) -> str:
     last_error = None
-    for player_client in PLAYER_CLIENTS:
-        youtube_args = {"player_client": [player_client]}
+    # Let yt-dlp choose its supported clients if all configured overrides fail.
+    clients = tuple(dict.fromkeys((*PLAYER_CLIENTS, "default"))) if direct else PLAYER_CLIENTS
+    for player_client in clients:
+        youtube_args = {} if player_client == "default" else {"player_client": [player_client]}
         extractor_args = {"youtube": youtube_args}
         if POT_PROVIDER and player_client in {"mweb", "web"}:
             youtube_args["fetch_pot"] = ["always"]
@@ -3335,8 +3337,9 @@ def _extract_media_url(video_url: str) -> str:
             if not direct_url:
                 raise ValueError("No compatible media URL was returned")
 
-            media_host = (urlsplit(direct_url).hostname or "").lower().rstrip(".")
-            if not any(media_host.endswith(suffix) for suffix in ALLOWED_MEDIA_SUFFIXES):
+            media = urlsplit(direct_url)
+            media_host = (media.hostname or "").lower().rstrip(".")
+            if media.scheme != "https" or media.username is not None or media.password is not None or not any(media_host.endswith(suffix) for suffix in ALLOWED_MEDIA_SUFFIXES):
                 raise ValueError("Unexpected media host")
             return direct_url
         except (DownloadError, ValueError, OSError) as error:
@@ -4380,13 +4383,6 @@ async def resolve_video(
     client = _request_client_key(request)
     _check_rate_limit(client)
 
-    if request.headers.get("origin", "").lower() not in SITE_ORIGINS:
-        return RedirectResponse(
-            "https://video.piloton.cc/youtube/relay.mp4?" + urlencode({"url": video_url}),
-            status_code=307,
-            headers={"Cache-Control": "no-store", "X-Resolver-Path": "youtube-relay"},
-        )
-
     now = time.monotonic()
     cached = _cache.get(video_url)
     if cached and cached[0] > now:
@@ -4394,7 +4390,7 @@ async def resolve_video(
 
     try:
         async with _extract_slots:
-            direct_url = await asyncio.to_thread(_extract_media_url, video_url)
+            direct_url = await asyncio.to_thread(_extract_media_url, video_url, direct=True)
     except DownloadError as error:
         print(f"yt-dlp extraction failed: {error}", file=sys.stderr, flush=True)
         if KSYNC_FALLBACK:
