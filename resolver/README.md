@@ -52,8 +52,9 @@ YouTubeの直接転送に成功した応答は、既定で180秒間Vercel CDNへ
 2. PorkbunのDNSで `video.piloton.cc` のAレコードをサーバーのIPv4アドレスへ向けます。
 3. この `resolver` ディレクトリをサーバーへ配置します。
 4. `.env.example` を `.env` にコピーし、固定ISPプロキシを使う場合だけ `YOUTUBE_PROXY_URL` を設定します。TVer・ABEMAを使う場合は日本の固定ISPプロキシを `JAPAN_PROXY_URL` に設定します。実際の認証情報はGitHubへ保存しません。
-5. `docker compose up -d --build` を実行します。
-6. `https://video.piloton.cc/health` が `{"status":"ok"}` を返すことを確認します。
+5. 認証が必要なYouTube動画も扱う場合は、VPS上の既存のMusicBot Cookieを `install -o 10001 -g 10001 -m 400 /opt/jp-music-bot/cookies.txt /opt/piloton-youtube-cookies.txt` で専用ファイルにコピーします。CookieはGitHubに保存せず、通常の取得が失敗したときだけ使います。元ファイルを更新したら専用ファイルも更新してください。
+6. `docker compose up -d --build` を実行します。
+7. `https://video.piloton.cc/health` が `{"status":"ok"}` を返すことを確認します。
 
 Vercelを利用する場合、上記のVPS向け手順は不要です。
 
