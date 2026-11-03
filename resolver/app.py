@@ -46,6 +46,8 @@ from yt_dlp.extractor.abematv import AbemaLicenseRH, AbemaTVBaseIE
 from yt_dlp.networking.exceptions import RequestError
 from yt_dlp.utils import DownloadError
 
+from visitor_counter import VisitorCounter
+
 
 app = FastAPI(
     title="Piloton Video URL Resolver",
@@ -57,7 +59,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://piloton.cc", "https://www.piloton.cc"],
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -112,6 +114,10 @@ PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "30")))
 RATE_WINDOW_SECONDS = max(1, int(os.getenv("RATE_WINDOW_SECONDS", "60")))
 MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
+VISITOR_COUNTER = VisitorCounter(
+    Path(os.getenv("VISITOR_COUNT_FILE", "/var/data/visitor-count.json")).expanduser(),
+    retention_days=int(os.getenv("VISITOR_COUNT_RETENTION_DAYS", "90")),
+)
 KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "1").lower() in {"1", "true", "yes"}
 REDIRECTOR_BASE_URL = "https://r.0cm.org/?url="
 KSYNC_BASE_URL = "https://ksync.arcanescripts.com/custom/redir-url?videoUrl="
@@ -3629,6 +3635,28 @@ def _resolve_redgifs_media(
         views = None
 
     return resolved_id, quality, direct_url, username, likes, views
+
+
+@app.get("/visits")
+async def read_visits() -> JSONResponse:
+    try:
+        summary = await asyncio.to_thread(VISITOR_COUNTER.read)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"Visitor count read failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=503, detail="Visitor count is unavailable") from error
+    return JSONResponse(summary, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/visits")
+async def count_visit(request: Request) -> JSONResponse:
+    if request.headers.get("origin", "").lower() not in SITE_ORIGINS:
+        raise HTTPException(status_code=403, detail="Origin is not allowed")
+    try:
+        summary = await asyncio.to_thread(VISITOR_COUNTER.increment)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"Visitor count update failed: {type(error).__name__}", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=503, detail="Visitor count is unavailable") from error
+    return JSONResponse(summary, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/health")

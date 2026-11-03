@@ -1,6 +1,6 @@
 # Piloton Video URL Resolver
 
-`vrchat-youtube.html` の公開YouTube動画URL転送、`vrchat-stream.html` の独自Stream変換、`redgifs-original.html` の公開RedGifs MP4 URL取得を担当するバックエンドです。ニコニコ動画は分離された映像と音声を音声付きMP4へリアルタイム結合します。TVerは映像・音声の各HLS断片を1本のMPEG-TSへリアルタイム結合し、VRChatが音声を含む単一トラックとして再生できるようにします。複数の映像・音声候補を含むHLSは、VRChat向けに720p以下の1組へ整理します。ABEMAの専用暗号鍵は期限付きHTTPS URLへ変換し、SoundCloudは単曲URLの直接MP3だけを短時間で解決します。
+`vrchat-youtube.html` の公開YouTube動画URL転送、`vrchat-stream.html` の独自Stream変換、`redgifs-original.html` の公開RedGifs MP4 URL取得、トップページの訪問数カウントを担当するバックエンドです。ニコニコ動画は分離された映像と音声を音声付きMP4へリアルタイム結合します。TVerは映像・音声の各HLS断片を1本のMPEG-TSへリアルタイム結合し、VRChatが音声を含む単一トラックとして再生できるようにします。複数の映像・音声候補を含むHLSは、VRChat向けに720p以下の1組へ整理します。ABEMAの専用暗号鍵は期限付きHTTPS URLへ変換し、SoundCloudは単曲URLの直接MP3だけを短時間で解決します。
 
 ## VPS運用（推奨）
 
@@ -23,6 +23,8 @@ YouTubeの直接転送に成功した応答は、既定で180秒間Vercel CDNへ
 ## 構成
 
 - `GET /health` — 稼働確認
+- `GET /visits` — 累計・今日・昨日の訪問数を取得
+- `POST /visits` — `piloton.cc` からの訪問を1件加算して現在値を返す
 - `GET /stream?url=<動画URL>` — ニコニコ動画は映像・音声一体型MP4ストリーム、Instagramの公開投稿はKkinstagram経由の動画・画像URL、その他の対応サイトは直接メディアURLまたは整理済みHLSを返す
 - `GET /stream/niconico/mux.mp4?token=<一時トークン>` — ニコニコ動画の映像とAAC音声を1本の断片化MP4へリアルタイム結合
 - `GET /stream/niconico/<audio|video>.<拡張子>?token=<一時トークン>` — ニコニコ動画のHLSプレイリスト、暗号鍵、動画・音声断片をトラック別に中継
@@ -55,6 +57,8 @@ YouTubeの直接転送に成功した応答は、既定で180秒間Vercel CDNへ
 5. 認証が必要なYouTube動画も扱う場合は、VPS上の既存のMusicBot Cookieを `install -o 10001 -g 10001 -m 400 /opt/jp-music-bot/cookies.txt /opt/piloton-youtube-cookies.txt` で専用ファイルにコピーします。CookieはGitHubに保存せず、通常の取得が失敗したときだけ使います。元ファイルを更新したら専用ファイルも更新してください。
 6. `docker compose up -d --build` を実行します。
 7. `https://video.piloton.cc/health` が `{"status":"ok"}` を返すことを確認します。
+
+Docker Compose版では訪問数を `visitor_data` ボリュームへ保存します。別構成では `VISITOR_COUNT_FILE` に永続保存先を指定してください。RenderのFree Web Serviceはローカルファイルが再起動やスピンダウンで消えるため、長期保存する場合は永続ディスクを利用できる有料プラン、または外部データストアが必要です。
 
 Vercelを利用する場合、上記のVPS向け手順は不要です。
 

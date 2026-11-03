@@ -14,6 +14,7 @@ services:
       MAX_CONCURRENT_EXTRACTS: ${MAX_CONCURRENT_EXTRACTS:-2}
       PLAYER_CLIENTS: ${PLAYER_CLIENTS:-web_embedded,mweb,android_vr}
       PLAYER_TEST_PREVIEW_SECONDS: ${PLAYER_TEST_PREVIEW_SECONDS:-12}
+      VISITOR_COUNT_FILE: /var/data/visitor-count.json
       YOUTUBE_PROXY_URL: ${YOUTUBE_PROXY_URL:-}
       YOUTUBE_COOKIE_FILE: /run/youtube-cookies.txt
       JAPAN_PROXY_URL: ${JAPAN_PROXY_URL:-}
@@ -22,6 +23,7 @@ services:
     volumes:
       - /opt/piloton-private-niconico:/run/private-niconico:ro
       - /opt/piloton-youtube-cookies.txt:/run/youtube-cookies.txt:ro
+      - visitor_data:/var/data
     healthcheck:
       test:
         - CMD
@@ -62,3 +64,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  visitor_data:

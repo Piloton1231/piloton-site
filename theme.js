@@ -92,15 +92,64 @@
     });
   }
 
+  async function updateVisitorCounter() {
+    const counter = document.getElementById('visitor-count');
+    if (!counter) return;
+
+    const productionHosts = new Set(['piloton.cc', 'www.piloton.cc']);
+    if (!productionHosts.has(window.location.hostname)) return;
+
+    let counted = false;
+    try {
+      counted = sessionStorage.getItem('pchan-visit-counted') === '1';
+    } catch {
+      // A visit can still be counted when session storage is unavailable.
+    }
+
+    try {
+      const response = await fetch(counter.dataset.endpoint, {
+        method: counted ? 'GET' : 'POST',
+        mode: 'cors',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) throw new Error(`Visitor counter returned ${response.status}`);
+      const data = await response.json();
+      if (![data.total, data.today, data.yesterday].every(Number.isInteger)) {
+        throw new Error('Visitor counter returned invalid data');
+      }
+
+      const formatter = new Intl.NumberFormat('ja-JP');
+      counter.textContent = `${formatter.format(data.total)} visits`;
+      counter.title = `今日 ${formatter.format(data.today)} / 昨日 ${formatter.format(data.yesterday)}`;
+      counter.setAttribute(
+        'aria-label',
+        `累計訪問数 ${formatter.format(data.total)}、今日 ${formatter.format(data.today)}、昨日 ${formatter.format(data.yesterday)}`,
+      );
+      if (!counted) {
+        try {
+          sessionStorage.setItem('pchan-visit-counted', '1');
+        } catch {
+          // The displayed count remains valid without storage.
+        }
+      }
+    } catch {
+      counter.textContent = 'Visits —';
+      counter.title = '訪問数を取得できませんでした';
+    }
+  }
+
   applyTheme(readTheme(), false);
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       installToggle();
       installGlassLighting();
+      updateVisitorCounter();
     }, { once: true });
   } else {
     installToggle();
     installGlassLighting();
+    updateVisitorCounter();
   }
 })();

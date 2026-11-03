@@ -15,6 +15,8 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends python3 python3-venv ca-certificates ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 resolver \
+    && mkdir --parents /var/data \
+    && chown resolver:resolver /var/data \
     && python3 -m venv /opt/venv
 
 WORKDIR /resolver
@@ -22,7 +24,7 @@ WORKDIR /resolver
 COPY requirements.txt requirements-docker.txt ./
 RUN pip install --no-cache-dir --requirement requirements-docker.txt
 
-COPY app.py private_niconico.py ./
+COPY app.py private_niconico.py visitor_counter.py ./
 USER resolver
 
 EXPOSE 8000

@@ -380,8 +380,17 @@ button:disabled {
 .museum-stage {
   overflow: hidden;
   min-height: min(720px, calc(100vh - 112px)) !important;
-  padding: clamp(28px, 5vw, 68px) !important;
+  padding: clamp(48px, 8vw, 104px) clamp(22px, 6vw, 76px) !important;
   border-radius: 42px !important;
+}
+
+.museum-stage::before {
+  top: -58% !important;
+  right: auto !important;
+  left: 50% !important;
+  width: min(66rem, 118vw) !important;
+  background: radial-gradient(circle, color-mix(in srgb, var(--blue) 18%, transparent), color-mix(in srgb, var(--purple) 8%, transparent) 38%, transparent 68%) !important;
+  transform: translateX(-50%);
 }
 
 .museum-stage::before,
@@ -402,9 +411,44 @@ button:disabled {
 
 .hero-grid {
   display: grid !important;
-  grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
   gap: clamp(34px, 6vw, 80px) !important;
   align-items: center !important;
+}
+
+.hero-copy {
+  width: 100%;
+}
+
+.museum-stage .hero-copy {
+  text-align: center;
+}
+
+.museum-stage .kicker {
+  display: block !important;
+  width: fit-content;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  border: 0 !important;
+  color: var(--soft) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  letter-spacing: 0.16em !important;
+}
+
+.museum-stage h1 {
+  margin: 22px 0 24px !important;
+  font-size: clamp(76px, 13vw, 164px) !important;
+  font-weight: 720 !important;
+  letter-spacing: -0.078em !important;
+}
+
+.museum-stage .lead {
+  max-width: 38rem;
+  margin: 0 auto !important;
+  color: color-mix(in srgb, var(--ink) 68%, transparent) !important;
+  font-size: clamp(16px, 1.8vw, 20px) !important;
+  line-height: 1.7 !important;
 }
 
 .kicker,
@@ -461,9 +505,15 @@ h1,
 
 .link-grid {
   display: grid !important;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   gap: 10px !important;
-  margin-top: 30px !important;
+  margin-top: clamp(44px, 7vw, 76px) !important;
+}
+
+.visitor-status {
+  min-width: 84px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .portal-link {
@@ -471,19 +521,26 @@ h1,
   display: flex !important;
   flex-direction: column;
   justify-content: space-between !important;
-  min-height: 106px !important;
-  padding: 16px !important;
+  min-height: 158px !important;
+  padding: 22px !important;
   overflow: hidden;
   border: 1px solid var(--separator) !important;
   border-radius: 24px !important;
   color: var(--ink) !important;
   background:
+    radial-gradient(circle at 90% 12%, color-mix(in srgb, var(--card-accent, var(--blue)) 20%, transparent), transparent 48%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.08), transparent 58%),
     var(--control) !important;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
   text-decoration: none !important;
   transition: transform 220ms ease, border-color 220ms ease, background-color 220ms ease, box-shadow 220ms ease !important;
 }
+
+.portal-link:nth-child(2) { --card-accent: var(--cyan); }
+.portal-link:nth-child(3) { --card-accent: var(--orange); }
+.portal-link:nth-child(4) { --card-accent: var(--purple); }
+.portal-link:nth-child(5) { --card-accent: var(--pink); }
+.portal-link:nth-child(6) { --card-accent: var(--green); }
 
 .portal-link::after {
   content: "↗" !important;
@@ -529,9 +586,18 @@ h1,
 
 .portal-title {
   color: var(--ink) !important;
-  font-size: 15px !important;
-  font-weight: 680 !important;
-  letter-spacing: -0.02em !important;
+  margin-top: auto;
+  font-size: 20px !important;
+  font-weight: 690 !important;
+  letter-spacing: -0.035em !important;
+}
+
+.portal-description {
+  display: block;
+  margin-top: 7px;
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .gallery-side {
@@ -899,6 +965,10 @@ body.redirect-page {
   .quick-info {
     display: none !important;
   }
+
+  .link-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
 }
 
 @media (max-width: 680px) {
@@ -929,8 +999,16 @@ body.redirect-page {
     height: 36px !important;
   }
 
-  .system-status,
   .gate-label {
+    display: none !important;
+  }
+
+  .system-status {
+    display: flex !important;
+    margin-left: auto !important;
+  }
+
+  .system-status .status-pill:not(.visitor-status) {
     display: none !important;
   }
 
@@ -957,6 +1035,14 @@ body.redirect-page {
     border-radius: 30px !important;
   }
 
+  .museum-stage {
+    padding-block: 54px 28px !important;
+  }
+
+  .museum-stage h1 {
+    font-size: clamp(64px, 24vw, 92px) !important;
+  }
+
   h1,
   .gate-heading {
     font-size: clamp(42px, 16vw, 68px) !important;
@@ -967,7 +1053,7 @@ body.redirect-page {
   }
 
   .portal-link {
-    min-height: 88px !important;
+    min-height: 126px !important;
   }
 
   .gallery-side {

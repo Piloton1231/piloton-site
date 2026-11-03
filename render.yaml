@@ -20,5 +20,7 @@ services:
         value: "60"
       - key: MAX_CONCURRENT_EXTRACTS
         value: "2"
+      - key: VISITOR_COUNT_FILE
+        value: /var/data/visitor-count.json
       - key: PLAYER_CLIENT
         value: android_vr
