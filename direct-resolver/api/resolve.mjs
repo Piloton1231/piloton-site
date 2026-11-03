@@ -35,6 +35,11 @@ const YOUTUBE_HOSTS = new Set([
   "youtu.be",
 ]);
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const MAX_HOMEPAGE_BYTES = 2_000_000;
+const MAX_INTERPRETER_BYTES = 1_000_000;
+const RATE_LIMIT = 12;
+const RATE_WINDOW_MS = 60_000;
+const requestBuckets = new Map();
 
 let domReady = false;
 let minterState = null;
@@ -49,9 +54,70 @@ function jsonError(status, detail) {
       headers: {
         "Cache-Control": "no-store",
         "Access-Control-Allow-Origin": "https://piloton.cc",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
       },
     },
   );
+}
+
+async function readLimitedText(response, maxBytes) {
+  const declaredLength = Number.parseInt(
+    response.headers.get("content-length") || "0",
+    10,
+  );
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel();
+    throw new Error("Upstream response is too large");
+  }
+
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("Upstream response is too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
+function requestClientKey(request) {
+  const trustedHeader = process.env.VERCEL
+    ? request.headers.get("x-vercel-forwarded-for")
+    : request.headers.get("x-piloton-client-ip");
+  return (trustedHeader || "unknown").split(",", 1)[0].trim().slice(0, 128);
+}
+
+function checkRateLimit(request) {
+  const now = Date.now();
+  const client = requestClientKey(request);
+  const recent = (requestBuckets.get(client) || []).filter(
+    (timestamp) => timestamp > now - RATE_WINDOW_MS,
+  );
+  if (recent.length >= RATE_LIMIT) return false;
+  recent.push(now);
+  requestBuckets.set(client, recent);
+  if (requestBuckets.size > 10_000) {
+    for (const [key, timestamps] of requestBuckets) {
+      if (!timestamps.some((timestamp) => timestamp > now - RATE_WINDOW_MS)) {
+        requestBuckets.delete(key);
+      }
+    }
+  }
+  return true;
 }
 
 function parseVideoId(value) {
@@ -135,7 +201,7 @@ async function createMinter() {
   if (!homepageResponse.ok) {
     throw new Error(`YouTube homepage returned ${homepageResponse.status}`);
   }
-  const homepage = await homepageResponse.text();
+  const homepage = await readLimitedText(homepageResponse, MAX_HOMEPAGE_BYTES);
 
   const ytcfgMatch = homepage.match(/ytcfg\.set\(({.+?})\);/s);
   if (ytcfgMatch) {
@@ -158,13 +224,27 @@ async function createMinter() {
     throw new Error("YouTube attestation challenge is incomplete");
   }
 
-  const interpreterResponse = await fetch(`https:${interpreterPath}`);
+  const interpreterUrl = new URL(interpreterPath, "https://www.youtube.com/");
+  if (
+    interpreterUrl.protocol !== "https:" ||
+    !YOUTUBE_HOSTS.has(interpreterUrl.hostname.toLowerCase()) ||
+    interpreterUrl.username ||
+    interpreterUrl.password ||
+    interpreterUrl.port ||
+    !interpreterUrl.pathname.startsWith("/s/player/")
+  ) {
+    throw new Error("BotGuard interpreter URL is not trusted");
+  }
+  const interpreterResponse = await fetch(interpreterUrl);
   if (!interpreterResponse.ok) {
     throw new Error(
       `BotGuard interpreter returned ${interpreterResponse.status}`,
     );
   }
-  const interpreterJavascript = await interpreterResponse.text();
+  const interpreterJavascript = await readLimitedText(
+    interpreterResponse,
+    MAX_INTERPRETER_BYTES,
+  );
   new Function(interpreterJavascript)();
 
   const botGuard = await BotGuardClient.create({
@@ -303,6 +383,9 @@ async function extractDirectUrl(videoId) {
 }
 
 export async function GET(request) {
+  if (!checkRateLimit(request)) {
+    return jsonError(429, "Too many requests");
+  }
   const requestUrl = new URL(request.url);
   let videoId;
   try {
@@ -318,11 +401,15 @@ export async function GET(request) {
       headers: {
         Location: directUrl,
         "Cache-Control": "private, max-age=120",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
         "X-Resolver-Path": "direct-googlevideo",
       },
     });
   } catch (error) {
-    console.error("Direct resolver failed", error);
+    console.error("Direct resolver failed", error?.name || "Error");
     return jsonError(502, "YouTube direct URL extraction failed");
   }
 }

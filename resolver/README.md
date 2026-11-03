@@ -45,6 +45,9 @@ YouTubeの直接転送に成功した応答は、既定で180秒間Vercel CDNへ
 - Vercel版でYouTube側に自前抽出を拒否された場合はKsync予備経路へ自動切替
 - プレイリストは最大200件（`PLAYLIST_MAX_ITEMS` で変更可能）
 - 簡易キャッシュ、同時実行数制限、アクセス回数制限付き
+- メディア中継用の一時トークンはHMAC署名され、URLやCookieの改ざんを拒否
+- 訪問数更新は許可Origin・Fetch Metadata・専用レート制限で保護
+- Caddyから渡す専用ヘッダー以外の転送元IPヘッダーを信頼しない
 - 通常のアクセスログは無効
 - ニコニコ動画、ABEMA、TVerの中継は通信量を消費するため、小規模利用を前提とする
 
@@ -58,7 +61,7 @@ YouTubeの直接転送に成功した応答は、既定で180秒間Vercel CDNへ
 6. `docker compose up -d --build` を実行します。
 7. `https://video.piloton.cc/health` が `{"status":"ok"}` を返すことを確認します。
 
-Docker Compose版では訪問数を `visitor_data` ボリュームへ保存します。別構成では `VISITOR_COUNT_FILE` に永続保存先を指定してください。RenderのFree Web Serviceはローカルファイルが再起動やスピンダウンで消えるため、長期保存する場合は永続ディスクを利用できる有料プラン、または外部データストアが必要です。
+Docker Compose版では訪問数とストリーム用署名鍵を `visitor_data` ボリュームへ保存します。別構成では `VISITOR_COUNT_FILE` と `STREAM_TOKEN_SECRET_FILE` に永続保存先を指定してください。署名鍵を環境変数で管理する場合は、32文字以上のランダムな `STREAM_TOKEN_SECRET` を指定し、GitHubには保存しないでください。RenderのFree Web Serviceはローカルファイルが再起動やスピンダウンで消えるため、長期保存する場合は永続ディスクを利用できる有料プラン、または外部データストアが必要です。
 
 Vercelを利用する場合、上記のVPS向け手順は不要です。
 

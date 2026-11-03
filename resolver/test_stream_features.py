@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,10 +10,69 @@ import app
 
 
 class StreamFeatureTests(unittest.TestCase):
+    def test_stream_token_secret_persists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            secret_file = app.Path(directory) / "stream-token.key"
+            with patch.object(app, "STREAM_TOKEN_SECRET_FILE", secret_file), patch.object(
+                app, "_stream_token_secret", None
+            ):
+                first = app._get_stream_token_secret()
+                app._stream_token_secret = None
+                second = app._get_stream_token_secret()
+            self.assertEqual(first, second)
+            self.assertEqual(len(first), 32)
+
+    def test_stream_tokens_are_signed_and_reject_tampering(self):
+        upstream = "https://media.dmcdn.net/example/master.m3u8"
+        with patch.object(app, "_stream_token_secret", b"s" * 32):
+            token = app._encode_player_hls_token(upstream)
+            self.assertIn(".", token)
+            self.assertEqual(app._decode_player_hls_token(token), upstream)
+
+            payload, signature = token.rsplit(".", 1)
+            replacement = "a" if payload[0] != "a" else "b"
+            tampered = replacement + payload[1:] + "." + signature
+            with self.assertRaises(app.HTTPException):
+                app._decode_player_hls_token(tampered)
+            with self.assertRaises(app.HTTPException):
+                app._decode_player_hls_token(payload)
+            with self.assertRaises(app.HTTPException):
+                app._decode_player_hls_token("不正." + signature)
+
+    def test_client_key_ignores_untrusted_forwarding_headers(self):
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [(b"x-forwarded-for", b"198.51.100.1")],
+            "client": ("203.0.113.9", 1234),
+            "server": ("testserver", 443),
+        }
+        request = app.Request(scope)
+        with patch.object(app, "TRUSTED_CLIENT_IP_HEADER", ""):
+            self.assertEqual(app._request_client_key(request), "203.0.113.9")
+
+    def test_visit_rate_limit_is_separate_and_bounded(self):
+        with patch.object(app, "VISIT_RATE_LIMIT", 2), patch.object(
+            app, "VISIT_RATE_WINDOW_SECONDS", 60
+        ):
+            app._visit_requests.clear()
+            app._check_visit_rate_limit("203.0.113.9")
+            app._check_visit_rate_limit("203.0.113.9")
+            with self.assertRaises(app.HTTPException) as error:
+                app._check_visit_rate_limit("203.0.113.9")
+            self.assertEqual(error.exception.status_code, 429)
+            app._visit_requests.clear()
+
     def test_private_head_checks_ticket_without_starting_media(self):
-        import asyncio
         with patch.object(app, '_read_private_nico_ticket', return_value=('url', 'cookie')) as read, patch.object(app.Path, 'is_file', return_value=True), patch.object(app, '_start_niconico_mux_process') as start:
-            response = asyncio.run(app.private_niconico_playback('a' * 43))
+            playback = app.private_niconico_playback('a' * 43)
+            with self.assertRaises(StopIteration) as completed:
+                playback.send(None)
+            response = completed.exception.value
         read.assert_called_once_with('a' * 43)
         start.assert_not_called()
         self.assertEqual(response.status_code, 200)
@@ -22,7 +82,7 @@ class StreamFeatureTests(unittest.TestCase):
 
     def test_private_nico_proxy_not_embedded_in_ffmpeg_arguments(self):
         proxy = 'http://user:password@proxy.example:8000'
-        with patch.object(app, '_validate_niconico_upstream_url', side_effect=lambda x: x), patch.object(app.subprocess, 'Popen') as popen:
+        with patch.object(app, '_validate_niconico_upstream_url', side_effect=lambda x: x), patch.object(app, '_ffmpeg_executable', return_value='ffmpeg'), patch.object(app.subprocess, 'Popen') as popen:
             app._start_niconico_mux_process('https://delivery.domand.nicovideo.jp/master.m3u8', 'a' * 24, proxy)
         self.assertEqual(popen.call_args.kwargs['env']['https_proxy'], proxy)
         self.assertNotIn(proxy, str(popen.call_args.args))

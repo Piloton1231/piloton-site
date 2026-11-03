@@ -3,6 +3,7 @@ import base64
 import html
 from html.parser import HTMLParser
 import hashlib
+import hmac
 import http.cookiejar
 from http.client import IncompleteRead
 import ipaddress
@@ -10,6 +11,7 @@ import itertools
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -60,7 +62,7 @@ app.add_middleware(
     allow_origins=["https://piloton.cc", "https://www.piloton.cc"],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["Accept", "Content-Type", "Range"],
 )
 
 ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
@@ -113,11 +115,22 @@ METADATA_CACHE_SECONDS = max(0, int(os.getenv("METADATA_CACHE_SECONDS", "300")))
 PLAYLIST_MAX_ITEMS = max(1, min(500, int(os.getenv("PLAYLIST_MAX_ITEMS", "200"))))
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT", "30")))
 RATE_WINDOW_SECONDS = max(1, int(os.getenv("RATE_WINDOW_SECONDS", "60")))
+VISIT_RATE_LIMIT = max(1, min(30, int(os.getenv("VISIT_RATE_LIMIT", "6"))))
+VISIT_RATE_WINDOW_SECONDS = max(
+    10, min(3600, int(os.getenv("VISIT_RATE_WINDOW_SECONDS", "60")))
+)
+TRUSTED_CLIENT_IP_HEADER = os.getenv("TRUSTED_CLIENT_IP_HEADER", "").strip().lower()
 MAX_CONCURRENT_EXTRACTS = max(1, int(os.getenv("MAX_CONCURRENT_EXTRACTS", "2")))
 VISITOR_COUNTER = VisitorCounter(
     Path(os.getenv("VISITOR_COUNT_FILE", "/var/data/visitor-count.json")).expanduser(),
     retention_days=int(os.getenv("VISITOR_COUNT_RETENTION_DAYS", "90")),
 )
+STREAM_TOKEN_SECRET_FILE = Path(
+    os.getenv(
+        "STREAM_TOKEN_SECRET_FILE",
+        str(VISITOR_COUNTER.path.with_name(".stream-token.key")),
+    )
+).expanduser()
 KSYNC_FALLBACK = os.getenv("KSYNC_FALLBACK", "1").lower() in {"1", "true", "yes"}
 REDIRECTOR_BASE_URL = "https://r.0cm.org/?url="
 KSYNC_BASE_URL = "https://ksync.arcanescripts.com/custom/redir-url?videoUrl="
@@ -306,6 +319,9 @@ STREAM_COOKIE_PATTERN = re.compile(r"[A-Za-z0-9._~:-]{16,256}")
 _cache: dict[str, tuple[float, str]] = {}
 _metadata_cache: dict[str, tuple[float, dict]] = {}
 _requests: dict[str, deque[float]] = defaultdict(deque)
+_visit_requests: dict[str, deque[float]] = defaultdict(deque)
+_stream_token_secret: bytes | None = None
+_stream_token_secret_lock = threading.Lock()
 _extract_slots = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTS)
 _metadata_slots = asyncio.Semaphore(2)
 _redgifs_slots = asyncio.Semaphore(4)
@@ -322,6 +338,95 @@ _pornhub_refresh_lock = threading.Lock()
 _pornhub_session_state = threading.local()
 _pornhub_refresh_inflight: dict[str, threading.Event] = {}
 _stream_manifest_cache: OrderedDict[str, tuple[float, tuple[str, str]]] = OrderedDict()
+
+
+def _get_stream_token_secret() -> bytes:
+    global _stream_token_secret
+    if _stream_token_secret is not None:
+        return _stream_token_secret
+
+    with _stream_token_secret_lock:
+        if _stream_token_secret is not None:
+            return _stream_token_secret
+
+        configured_secret = os.getenv("STREAM_TOKEN_SECRET", "")
+        if configured_secret:
+            if len(configured_secret) < 32:
+                raise RuntimeError("STREAM_TOKEN_SECRET must contain at least 32 characters")
+            _stream_token_secret = hashlib.sha256(configured_secret.encode()).digest()
+            return _stream_token_secret
+
+        try:
+            encoded_secret = STREAM_TOKEN_SECRET_FILE.read_bytes()
+        except FileNotFoundError:
+            secret = secrets.token_bytes(32)
+            try:
+                STREAM_TOKEN_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+                descriptor = os.open(
+                    STREAM_TOKEN_SECRET_FILE,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as secret_file:
+                    secret_file.write(base64.urlsafe_b64encode(secret))
+            except FileExistsError:
+                for _ in range(50):
+                    encoded_secret = STREAM_TOKEN_SECRET_FILE.read_bytes()
+                    if encoded_secret:
+                        break
+                    time.sleep(0.01)
+                else:
+                    raise RuntimeError("Stored stream token secret is empty")
+            except OSError:
+                # Local tests may not have access to /var/data. Production uses
+                # the persistent visitor_data volume and therefore keeps this key.
+                _stream_token_secret = secret
+                return _stream_token_secret
+            else:
+                _stream_token_secret = secret
+                return _stream_token_secret
+        except OSError:
+            _stream_token_secret = secrets.token_bytes(32)
+            return _stream_token_secret
+
+        try:
+            secret = base64.urlsafe_b64decode(encoded_secret)
+        except (ValueError, TypeError) as error:
+            raise RuntimeError("Stored stream token secret is invalid") from error
+        if len(secret) < 32:
+            raise RuntimeError("Stored stream token secret is too short")
+        _stream_token_secret = secret
+        return _stream_token_secret
+
+
+def _sign_stream_token(token: str) -> str:
+    signature = hmac.new(
+        _get_stream_token_secret(), token.encode("ascii"), hashlib.sha256
+    ).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{token}.{encoded_signature}"
+
+
+def _verify_stream_token(token: str, detail: str) -> str:
+    if not isinstance(token, str) or len(token) > 16000:
+        raise HTTPException(status_code=400, detail=detail)
+    payload, separator, encoded_signature = token.rpartition(".")
+    if not separator or not payload or not encoded_signature:
+        raise HTTPException(status_code=400, detail=detail)
+    try:
+        payload_bytes = payload.encode("ascii")
+        padding = "=" * (-len(encoded_signature) % 4)
+        supplied_signature = base64.urlsafe_b64decode(encoded_signature + padding)
+    except (UnicodeEncodeError, ValueError, TypeError) as error:
+        raise HTTPException(status_code=400, detail=detail) from error
+    if len(supplied_signature) != hashlib.sha256().digest_size:
+        raise HTTPException(status_code=400, detail=detail)
+    expected_signature = hmac.new(
+        _get_stream_token_secret(), payload_bytes, hashlib.sha256
+    ).digest()
+    if not hmac.compare_digest(supplied_signature, expected_signature):
+        raise HTTPException(status_code=400, detail=detail)
+    return payload
 
 
 def _cached_media_load(key: str, loader, max_age: int = 300):
@@ -991,10 +1096,11 @@ def _encode_tver_stream_token(upstream_url: str) -> str:
         [_validate_tver_upstream_url(upstream_url), int(time.time()) + STREAM_TOKEN_SECONDS],
         separators=(",", ":"),
     ).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    return _sign_stream_token(base64.urlsafe_b64encode(payload).decode().rstrip("="))
 
 
 def _decode_tver_stream_token(token: str) -> str:
+    token = _verify_stream_token(token, "Invalid TVer stream token")
     if len(token) > 6000:
         raise HTTPException(status_code=400, detail="Invalid TVer stream token")
     try:
@@ -1206,10 +1312,12 @@ def _encode_tver_mux_token(video_segment: dict, audio_segment: dict) -> str:
         ],
         separators=(",", ":"),
     ).encode()
-    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    encoded = "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    return _sign_stream_token(encoded)
 
 
 def _decode_tver_mux_token(token: str) -> tuple[dict, dict]:
+    token = _verify_stream_token(token, "Invalid TVer mux token")
     if len(token) > 12000 or not token.startswith("z"):
         raise HTTPException(status_code=400, detail="Invalid TVer mux token")
     try:
@@ -1464,10 +1572,12 @@ def _encode_bilibili_mux_token(video_url: str, audio_url: str) -> str:
         ],
         separators=(",", ":"),
     ).encode()
-    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    encoded = "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    return _sign_stream_token(encoded)
 
 
 def _decode_bilibili_mux_token(token: str) -> tuple[str, str]:
+    token = _verify_stream_token(token, "Invalid Bilibili mux token")
     if len(token) > 12000 or not token.startswith("z"):
         raise HTTPException(status_code=400, detail="Invalid Bilibili mux token")
     try:
@@ -1557,10 +1667,12 @@ def _encode_rutube_mux_token(upstream_url: str) -> str:
         ],
         separators=(",", ":"),
     ).encode()
-    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    encoded = "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    return _sign_stream_token(encoded)
 
 
 def _decode_rutube_mux_token(token: str) -> str:
+    token = _verify_stream_token(token, "Invalid Rutube mux token")
     if len(token) > 12000 or not token.startswith("z"):
         raise HTTPException(status_code=400, detail="Invalid Rutube mux token")
     try:
@@ -1616,10 +1728,11 @@ def _encode_abema_key_token(key: bytes) -> str:
         [key.hex(), int(time.time()) + ABEMA_TOKEN_SECONDS],
         separators=(",", ":"),
     ).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    return _sign_stream_token(base64.urlsafe_b64encode(payload).decode().rstrip("="))
 
 
 def _decode_abema_key_token(token: str) -> bytes:
+    token = _verify_stream_token(token, "Invalid video key token")
     if len(token) > 256:
         raise HTTPException(status_code=400, detail="Invalid video key token")
     try:
@@ -1655,10 +1768,11 @@ def _encode_abema_stream_token(upstream_url: str) -> str:
         [_validate_abema_upstream_url(upstream_url), int(time.time()) + ABEMA_TOKEN_SECONDS],
         separators=(",", ":"),
     ).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    return _sign_stream_token(base64.urlsafe_b64encode(payload).decode().rstrip("="))
 
 
 def _decode_abema_stream_token(token: str) -> str:
+    token = _verify_stream_token(token, "Invalid ABEMA stream token")
     if len(token) > 6000:
         raise HTTPException(status_code=400, detail="Invalid ABEMA stream token")
     try:
@@ -1862,10 +1976,12 @@ def _encode_tiktok_media_token(
         ],
         separators=(",", ":"),
     ).encode()
-    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    encoded = "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    return _sign_stream_token(encoded)
 
 
 def _decode_tiktok_media_token(token: str) -> tuple[str, str, str, bool]:
+    token = _verify_stream_token(token, "Invalid TikTok media token")
     if len(token) > 6000 or not token.startswith("z"):
         raise HTTPException(status_code=400, detail="Invalid TikTok media token")
     try:
@@ -2022,10 +2138,12 @@ def _encode_rule34video_media_token(upstream_url: str, source_url: str) -> str:
         ],
         separators=(",", ":"),
     ).encode()
-    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    encoded = "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    return _sign_stream_token(encoded)
 
 
 def _decode_rule34video_media_token(token: str) -> tuple[str, str]:
+    token = _verify_stream_token(token, "Invalid Rule34Video media token")
     if len(token) > 6000 or not token.startswith("z"):
         raise HTTPException(status_code=400, detail="Invalid Rule34Video media token")
     try:
@@ -2126,10 +2244,12 @@ def _encode_pornhub_media_token(
         ],
         separators=(",", ":"),
     ).encode()
-    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    encoded = "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    return _sign_stream_token(encoded)
 
 
 def _decode_pornhub_media_token(token: str) -> tuple[str, str, str]:
+    token = _verify_stream_token(token, "Invalid Pornhub media token")
     if len(token) > 6000 or not token.startswith("z"):
         raise HTTPException(status_code=400, detail="Invalid Pornhub media token")
     try:
@@ -2402,10 +2522,12 @@ def _encode_player_hls_token(upstream_url: str) -> str:
         ],
         separators=(",", ":"),
     ).encode()
-    return "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    encoded = "z" + base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
+    return _sign_stream_token(encoded)
 
 
 def _decode_player_hls_token(token: str) -> str:
+    token = _verify_stream_token(token, "Invalid Player Test media token")
     if len(token) > 6000 or not token.startswith("z"):
         raise HTTPException(status_code=400, detail="Invalid Player Test media token")
     try:
@@ -2862,7 +2984,8 @@ def _encode_stream_token(upstream_url: str, domand_cookie: str) -> str:
         separators=(",", ":"),
     ).encode()
     compressed = zlib.compress(payload, level=9)
-    return "z" + base64.urlsafe_b64encode(compressed).decode().rstrip("=")
+    encoded = "z" + base64.urlsafe_b64encode(compressed).decode().rstrip("=")
+    return _sign_stream_token(encoded)
 
 
 def _validate_niconico_upstream_url(value: str) -> str:
@@ -2890,6 +3013,7 @@ def _validate_niconico_upstream_url(value: str) -> str:
 
 
 def _decode_stream_token(token: str) -> tuple[str, str]:
+    token = _verify_stream_token(token, "Invalid stream token")
     if len(token) > 12000:
         raise HTTPException(status_code=400, detail="Invalid stream token")
 
@@ -3289,17 +3413,30 @@ def _check_rate_limit(client: str) -> None:
     recent.append(now)
 
 
+def _check_visit_rate_limit(client: str) -> None:
+    now = time.monotonic()
+    recent = _visit_requests[client]
+    while recent and recent[0] <= now - VISIT_RATE_WINDOW_SECONDS:
+        recent.popleft()
+    if len(recent) >= VISIT_RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many visit updates")
+    recent.append(now)
+
+
 def _request_client_key(request: Request) -> str:
-    for header_name in ("x-vercel-forwarded-for", "x-forwarded-for", "x-real-ip"):
-        raw_value = request.headers.get(header_name)
-        if not raw_value:
-            continue
+    if TRUSTED_CLIENT_IP_HEADER:
+        raw_value = request.headers.get(TRUSTED_CLIENT_IP_HEADER, "")
         candidate = raw_value.split(",", 1)[0].strip()
         try:
             return str(ipaddress.ip_address(candidate))
         except ValueError:
-            continue
-    return request.client.host if request.client else "unknown"
+            pass
+
+    candidate = request.client.host if request.client else ""
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return "unknown"
 
 
 def _extract_media_url_attempt(
@@ -3651,6 +3788,16 @@ async def read_visits() -> JSONResponse:
 async def count_visit(request: Request) -> JSONResponse:
     if request.headers.get("origin", "").lower() not in SITE_ORIGINS:
         raise HTTPException(status_code=403, detail="Origin is not allowed")
+    fetch_site = request.headers.get("sec-fetch-site", "").lower()
+    if fetch_site and fetch_site not in {"same-origin", "same-site"}:
+        raise HTTPException(status_code=403, detail="Cross-site visit updates are not allowed")
+    try:
+        content_length = int(request.headers.get("content-length", "0"))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid Content-Length") from error
+    if content_length < 0 or content_length > 1024:
+        raise HTTPException(status_code=413, detail="Request body is too large")
+    _check_visit_rate_limit(_request_client_key(request))
     try:
         summary = await asyncio.to_thread(VISITOR_COUNTER.increment)
     except (OSError, ValueError, json.JSONDecodeError) as error:

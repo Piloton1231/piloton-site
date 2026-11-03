@@ -8,9 +8,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-COPY api ./api
-COPY server.mjs ./server.mjs
+COPY --chown=node:node api ./api
+COPY --chown=node:node server.mjs ./server.mjs
 
 EXPOSE 8000
+
+USER node
 
 CMD ["npm", "start"]

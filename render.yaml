@@ -18,6 +18,10 @@ services:
         value: "12"
       - key: RATE_WINDOW_SECONDS
         value: "60"
+      - key: VISIT_RATE_LIMIT
+        value: "6"
+      - key: VISIT_RATE_WINDOW_SECONDS
+        value: "60"
       - key: MAX_CONCURRENT_EXTRACTS
         value: "2"
       - key: VISITOR_COUNT_FILE

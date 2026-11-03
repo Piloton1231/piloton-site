@@ -10,14 +10,22 @@ function sendJson(response, status, body) {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(data),
     "Cache-Control": "no-store",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
   });
   response.end(data);
 }
 
 const server = http.createServer(async (request, response) => {
+  if ((request.url || "").length > 4096) {
+    sendJson(response, 414, { detail: "Request URL is too long" });
+    return;
+  }
   const requestUrl = new URL(
     request.url || "/",
-    `http://${request.headers.host || "localhost"}`,
+    "http://localhost",
   );
 
   if (request.method !== "GET") {
@@ -40,7 +48,13 @@ const server = http.createServer(async (request, response) => {
   }
 
   try {
-    const result = await resolveYouTube(new Request(requestUrl));
+    const result = await resolveYouTube(
+      new Request(requestUrl, {
+        headers: {
+          "X-Piloton-Client-IP": request.socket.remoteAddress || "unknown",
+        },
+      }),
+    );
     response.writeHead(
       result.status,
       Object.fromEntries(result.headers.entries()),
@@ -51,11 +65,14 @@ const server = http.createServer(async (request, response) => {
       response.end();
     }
   } catch (error) {
-    console.error("Request failed", error);
+    console.error("Request failed", error?.name || "Error");
     sendJson(response, 500, { detail: "Internal server error" });
   }
 });
 
+server.maxHeadersCount = 64;
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
 server.requestTimeout = 65_000;
 server.listen(port, "0.0.0.0", () => {
   console.log(`Piloton direct resolver listening on port ${port}`);
