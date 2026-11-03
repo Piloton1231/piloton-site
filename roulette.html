@@ -5,13 +5,8 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https://video.piloton.cc; worker-src 'self' blob:; upgrade-insecure-requests">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>豪華ルーレット</title>
-  <script src="https://cdn.jsdelivr.net/npm/vue@3.5.44/dist/vue.global.prod.js"
-          integrity="sha384-tORx0bXmMnTC28EYQe1coaGZKSQupXQEYDBNex8xkzJ9iqUoNy9Y+VFBhVxi4kUr"
-          crossorigin="anonymous"></script>
   <link rel="stylesheet" href="gate-theme.css">
   <style>
-    [v-cloak] { display: none; }
-
     #app { min-height: 100vh; }
 
     .roulette-stage {
@@ -178,7 +173,7 @@
   <script src="theme.js"></script>
 </head>
 <body class="gate-page">
-  <div id="app" v-cloak>
+  <div id="app">
     <main class="gate-shell">
       <header class="gate-topbar" aria-label="サイトヘッダー">
         <div class="gate-brand">
@@ -200,22 +195,19 @@
               <div class="pointer" aria-hidden="true"></div>
               <canvas id="wheel-canvas" width="400" height="400"></canvas>
             </div>
-            <div class="winner-display" v-if="winner">
-              🎉 当選者: {{ winner }} 🎉
-            </div>
+            <div class="winner-display" id="winner-display" hidden></div>
           </div>
 
           <div class="right-section glass-card">
             <textarea
               class="museum-field"
-              v-model="participantsText"
-              :disabled="isSpinning"
+              id="participants-input"
               placeholder="参加者を入力 (一行につき一人)"
               aria-label="参加者を入力 (一行につき一人)"
             ></textarea>
             <div class="buttons">
-              <button class="museum-button" id="spin-btn" type="button" :disabled="isSpinning || participants.length === 0" @click="spinWheel">開始</button>
-              <button class="museum-button" id="reset-btn" type="button" :disabled="isSpinning" @click="resetWheel">リセット</button>
+              <button class="museum-button" id="spin-btn" type="button" disabled>開始</button>
+              <button class="museum-button" id="reset-btn" type="button">リセット</button>
             </div>
           </div>
         </div>
@@ -224,154 +216,168 @@
   </div>
 
   <script>
-    const app = Vue.createApp({
-      data() {
-        return {
-          participantsText: '',
-          rotation: 0,
-          isSpinning: false,
-          winner: null,
-        };
-      },
-      computed: {
-        participants() {
-          return this.participantsText.split('\n').filter(p => p.trim() !== '');
-        }
-      },
-      watch: {
-        participantsText() {
-          this.rotation = 0;
-          this.winner = null;
-          this.drawWheel();
-        }
-      },
-      methods: {
-        drawWheel(rotationDegrees = this.rotation) {
-          const canvas = document.getElementById('wheel-canvas');
-          const ctx = canvas.getContext('2d');
-          const centerX = canvas.width / 2;
-          const centerY = canvas.height / 2;
-          const radius = canvas.width / 2 - 5;
+    const canvas = document.getElementById('wheel-canvas');
+    const ctx = canvas.getContext('2d');
+    const participantsInput = document.getElementById('participants-input');
+    const spinButton = document.getElementById('spin-btn');
+    const resetButton = document.getElementById('reset-btn');
+    const winnerDisplay = document.getElementById('winner-display');
+    const state = { rotation: 0, isSpinning: false };
 
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+    function getParticipants() {
+      return participantsInput.value.split('\n').map(value => value.trim()).filter(Boolean);
+    }
 
-          if (this.participants.length === 0) {
-            ctx.fillStyle = '#a8b8d8';
-            ctx.font = '20px "Segoe UI", sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText('参加者を追加してください', centerX, centerY);
-            return;
-          }
+    function updateControls() {
+      participantsInput.disabled = state.isSpinning;
+      spinButton.disabled = state.isSpinning || getParticipants().length === 0;
+      resetButton.disabled = state.isSpinning;
+    }
 
-          if (this.participants.length === 1) {
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-            ctx.fillStyle = 'hsl(188, 78%, 68%)';
-            ctx.fill();
-            ctx.strokeStyle = 'rgba(2, 4, 13, 0.5)';
-            ctx.stroke();
-            ctx.fillStyle = '#02040d';
-            ctx.font = '700 18px "Segoe UI", sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(this.participants[0], centerX, centerY, radius * 1.35);
-            return;
-          }
+    function clearWinner() {
+      winnerDisplay.hidden = true;
+      winnerDisplay.textContent = '';
+    }
 
-          const segmentAngle = (2 * Math.PI) / this.participants.length;
-          const labelSize = Math.max(9, Math.min(16, 48 / Math.sqrt(this.participants.length)));
+    function drawWheel(rotationDegrees = state.rotation) {
+      const participants = getParticipants();
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      const radius = canvas.width / 2 - 5;
 
-          ctx.save();
-          ctx.translate(centerX, centerY);
-          ctx.rotate((rotationDegrees * Math.PI) / 180);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-          this.participants.forEach((participant, index) => {
-            const startAngle = index * segmentAngle;
-            const endAngle = startAngle + segmentAngle;
-
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.arc(0, 0, radius, startAngle, endAngle);
-            ctx.closePath();
-            ctx.fillStyle = `hsl(${(index * 360) / this.participants.length}, 78%, 68%)`;
-            ctx.fill();
-            ctx.strokeStyle = 'rgba(2, 4, 13, 0.5)';
-            ctx.stroke();
-
-            ctx.save();
-            ctx.rotate(startAngle + segmentAngle / 2);
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = '#02040d';
-            ctx.font = `700 ${labelSize}px "Segoe UI", sans-serif`;
-            ctx.fillText(participant, radius - 14, 0, radius * 0.7);
-            ctx.restore();
-          });
-
-          ctx.restore();
-        },
-        randomIndex(length) {
-          if (length <= 1) return 0;
-
-          if (window.crypto && window.crypto.getRandomValues) {
-            const values = new Uint32Array(1);
-            const limit = 0x100000000 - (0x100000000 % length);
-            do {
-              window.crypto.getRandomValues(values);
-            } while (values[0] >= limit);
-            return values[0] % length;
-          }
-
-          return Math.floor(Math.random() * length);
-        },
-        spinWheel() {
-          if (this.isSpinning || this.participants.length === 0) return;
-
-          this.isSpinning = true;
-          const spinDuration = 3000;
-          const startRotation = this.rotation;
-          const winnerIndex = this.randomIndex(this.participants.length);
-          const segmentDegrees = 360 / this.participants.length;
-          const targetRotation = (360 - ((winnerIndex + 0.5) * segmentDegrees)) % 360;
-          const startNormalized = ((startRotation % 360) + 360) % 360;
-          const alignmentRotation = (targetRotation - startNormalized + 360) % 360;
-          const fullTurns = 8 + this.randomIndex(5);
-          const totalRotation = fullTurns * 360 + alignmentRotation;
-          const startTime = performance.now();
-
-          const animate = (currentTime) => {
-            const elapsed = currentTime - startTime;
-            const progress = Math.min(elapsed / spinDuration, 1);
-            const easing = 1 - Math.pow(1 - progress, 3);
-            this.rotation = startRotation + totalRotation * easing;
-            this.drawWheel(this.rotation);
-
-            if (progress < 1) {
-              requestAnimationFrame(animate);
-            } else {
-              this.isSpinning = false;
-              this.rotation = targetRotation;
-              this.drawWheel(this.rotation);
-              this.winner = this.participants[winnerIndex];
-            }
-          };
-
-          requestAnimationFrame(animate);
-        },
-        resetWheel() {
-          this.rotation = 0;
-          this.participantsText = '';
-          this.winner = null;
-          this.drawWheel();
-        },
-      },
-      mounted() {
-        this.drawWheel();
+      if (participants.length === 0) {
+        ctx.fillStyle = '#a8b8d8';
+        ctx.font = '20px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('参加者を追加してください', centerX, centerY);
+        return;
       }
+
+      if (participants.length === 1) {
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'hsl(188, 78%, 68%)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(2, 4, 13, 0.5)';
+        ctx.stroke();
+        ctx.fillStyle = '#02040d';
+        ctx.font = '700 18px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(participants[0], centerX, centerY, radius * 1.35);
+        return;
+      }
+
+      const segmentAngle = (2 * Math.PI) / participants.length;
+      const labelSize = Math.max(9, Math.min(16, 48 / Math.sqrt(participants.length)));
+
+      ctx.save();
+      ctx.translate(centerX, centerY);
+      ctx.rotate((rotationDegrees * Math.PI) / 180);
+
+      participants.forEach((participant, index) => {
+        const startAngle = index * segmentAngle;
+        const endAngle = startAngle + segmentAngle;
+
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, radius, startAngle, endAngle);
+        ctx.closePath();
+        ctx.fillStyle = `hsl(${(index * 360) / participants.length}, 78%, 68%)`;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(2, 4, 13, 0.5)';
+        ctx.stroke();
+
+        ctx.save();
+        ctx.rotate(startAngle + segmentAngle / 2);
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#02040d';
+        ctx.font = `700 ${labelSize}px "Segoe UI", sans-serif`;
+        ctx.fillText(participant, radius - 14, 0, radius * 0.7);
+        ctx.restore();
+      });
+
+      ctx.restore();
+    }
+
+    function randomIndex(length) {
+      if (length <= 1) return 0;
+
+      if (window.crypto && window.crypto.getRandomValues) {
+        const values = new Uint32Array(1);
+        const limit = 0x100000000 - (0x100000000 % length);
+        do {
+          window.crypto.getRandomValues(values);
+        } while (values[0] >= limit);
+        return values[0] % length;
+      }
+
+      return Math.floor(Math.random() * length);
+    }
+
+    function spinWheel() {
+      const participants = getParticipants();
+      if (state.isSpinning || participants.length === 0) return;
+
+      state.isSpinning = true;
+      clearWinner();
+      updateControls();
+      const spinDuration = 3000;
+      const startRotation = state.rotation;
+      const winnerIndex = randomIndex(participants.length);
+      const segmentDegrees = 360 / participants.length;
+      const targetRotation = (360 - ((winnerIndex + 0.5) * segmentDegrees)) % 360;
+      const startNormalized = ((startRotation % 360) + 360) % 360;
+      const alignmentRotation = (targetRotation - startNormalized + 360) % 360;
+      const fullTurns = 8 + randomIndex(5);
+      const totalRotation = fullTurns * 360 + alignmentRotation;
+      const startTime = performance.now();
+
+      const animate = currentTime => {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / spinDuration, 1);
+        const easing = 1 - Math.pow(1 - progress, 3);
+        state.rotation = startRotation + totalRotation * easing;
+        drawWheel(state.rotation);
+
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+          return;
+        }
+
+        state.isSpinning = false;
+        state.rotation = targetRotation;
+        drawWheel(state.rotation);
+        winnerDisplay.textContent = `🎉 当選者: ${participants[winnerIndex]} 🎉`;
+        winnerDisplay.hidden = false;
+        updateControls();
+      };
+
+      requestAnimationFrame(animate);
+    }
+
+    participantsInput.addEventListener('input', () => {
+      state.rotation = 0;
+      clearWinner();
+      drawWheel();
+      updateControls();
     });
 
-    app.mount('#app');
+    spinButton.addEventListener('click', spinWheel);
+    resetButton.addEventListener('click', () => {
+      state.rotation = 0;
+      participantsInput.value = '';
+      clearWinner();
+      drawWheel();
+      updateControls();
+    });
+
+    drawWheel();
+    updateControls();
   </script>
 </body>
 </html>
