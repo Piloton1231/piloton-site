@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ぴーちゃんの未来館</title>
+  <title>Pchan — Web Tools</title>
   <style>
     :root {
       --bg: #02040d;
@@ -188,7 +188,7 @@
     }
 
     .museum-stage::after {
-      content: "FUTURE MUSEUM";
+      content: "";
       position: absolute;
       left: clamp(18px, 5vw, 62px);
       bottom: 8px;
@@ -603,32 +603,31 @@
       }
     }
   </style>
+  <link rel="stylesheet" href="liquid-glass.css">
+  <script src="theme.js"></script>
 </head>
 <body>
   <main class="site-shell">
     <header class="top-bar" aria-label="サイトヘッダー">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
-        Pii-chan Future Museum
+        Pchan
       </div>
       <div class="system-status" aria-label="システム状態">
         <span class="status-pill">Online</span>
-        <span class="status-pill">Neon Mode</span>
-        <span class="status-pill">Welcome</span>
+        <span class="status-pill">Liquid Glass</span>
+        <span class="status-pill">6 Tools</span>
       </div>
     </header>
 
     <section class="museum-stage" aria-label="ぴーちゃんの未来館 ホーム">
       <div class="hero-grid">
         <div class="hero-copy">
-          <div class="kicker">Hologram Entrance</div>
-          <h1>
-            <span class="title-line">でかけつ</span>
-            <span class="gradient-title">未来館</span>
-          </h1>
+          <div class="kicker">Personal Web Lab</div>
+          <h1><span class="gradient-title">Pchan</span></h1>
           <p class="lead">
-            ようこそぴーちゃんのホームページです！
-            適当に作ったサイトだよ！
+            日常で使える小さなツールを、ひとつの場所に。<br>
+            気になるものから、自由にどうぞ。
           </p>
 
           <nav class="link-grid" aria-label="コンテンツへのリンク">
@@ -683,8 +682,8 @@
 
     <section class="command-deck" aria-label="下部コントロール">
       <div class="deck-block quick-info">
-        <strong>Current Exhibit</strong>
-        <span>音楽・リンク・いいねを下のデッキに集約しました。</span>
+        <strong>Six tiny utilities</strong>
+        <span>気になるカードから、すぐにツールを開けます。</span>
       </div>
 
       <div class="deck-block music-player">

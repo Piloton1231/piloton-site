@@ -5,13 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex">
   <title>VRChat URL Converterへ移動します</title>
+  <link rel="stylesheet" href="liquid-glass.css">
+  <script src="theme.js"></script>
   <script>
     const destination = `vrchat-youtube.html${window.location.search}${window.location.hash}`;
     window.location.replace(destination);
   </script>
 </head>
-<body>
-  <p><a id="destination-link" href="vrchat-youtube.html">統合されたVRChat URL Converterを開く</a></p>
+<body class="redirect-page">
+  <main class="redirect-card">
+    <div class="kicker">Redirecting</div>
+    <h1>移動しています</h1>
+    <p>VRChat URL Converterを自動で開きます。</p>
+    <a id="destination-link" href="vrchat-youtube.html">VRChat URL Converterを開く</a>
+  </main>
   <script>
     document.getElementById('destination-link').href = `vrchat-youtube.html${window.location.search}${window.location.hash}`;
   </script>
